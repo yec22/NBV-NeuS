@@ -1,0 +1,1 @@
+python launch.py --config configs/neus-blender.yaml --resume /data/yesheng/NBV-NeRF/instant-nsr-pl/exp/neus-blender-lego/example@20230921-170810/ckpt/epoch=0-step=20000.ckpt --gpu 1 --test dataset.scene=lego
