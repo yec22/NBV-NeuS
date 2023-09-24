@@ -133,15 +133,6 @@ def scale(dtu_dir, tmp, old_mesh_file, scale_mesh_file, scan):
     # save as .ply
     old_mesh = trimesh.load(old_mesh_file)
     old_mesh.export(tmp)
-
-    # crop
-    mesh_o3d = o3d.io.read_triangle_mesh(tmp)
-    bounding_box = o3d.geometry.AxisAlignedBoundingBox()
-    bounding_box.min_bound = (-0.85, -0.85, -0.85)
-    bounding_box.max_bound = (0.85, 0.85, 0.85)
-    mesh_o3d = mesh_o3d.crop(bounding_box)
-    o3d.io.write_triangle_mesh(tmp, mesh_o3d)
-    
     old_mesh = trimesh.load(tmp)
 
     old_vertices = old_mesh.vertices[:]
@@ -208,7 +199,7 @@ def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs
 
     # clean meshes
     new_mesh = trimesh.load(new_mesh_file)
-    cc = trimesh.graph.connected_components(new_mesh.face_adjacency, min_len=1000)
+    cc = trimesh.graph.connected_components(new_mesh.face_adjacency, min_len=500)
     mask = np.zeros(len(new_mesh.faces), dtype=bool)
     mask[np.concatenate(cc)] = True
     new_mesh.update_faces(mask)
@@ -221,14 +212,13 @@ def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs
 
 if __name__ == "__main__":
 
-    scans = [122]
-
+    scans = [118]
     mask_kernel_size = 11
 
     dtu_dir = "load/DTU"
-    exp_path = "exp/neus-dtu-wmask-dtu_scan122/@20230924-002800/save"
+    exp_paths = ["exp/neus-dtu-wmask-dtu_scan118/@20230924-103904/save"]
 
-    for scan in scans:
+    for scan, exp_path in zip(scans, exp_paths):
         print("processing scan%d" % scan)
         
         n_images = 49 if scan < 83 else 64

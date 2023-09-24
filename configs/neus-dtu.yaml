@@ -7,7 +7,7 @@ dataset:
   scene: ???
   root_dir: ./load/DTU/${dataset.scene}
   cameras_file: cameras_sphere.npz
-  img_downscale: 1 # specify training image size by either img_wh or img_downscale
+  img_downscale: 2 # specify training image size by either img_wh or img_downscale
   apply_mask: false
 
 model:
@@ -107,16 +107,16 @@ model:
 system:
   name: neus-system
   loss:
-    lambda_rgb_mse: 10.0
-    lambda_rgb_l1: 0.0
+    lambda_rgb_mse: 0.
+    lambda_rgb_l1: 1.
     lambda_mask: 0.0
     lambda_eikonal: 0.1
-    lambda_curvature: 0.0
+    lambda_curvature: 0.
     lambda_sparsity: 0.0
     lambda_distortion: 0.0
     lambda_distortion_bg: 0.0
     lambda_opaque: 0.0
-    sparsity_scale: 1.0
+    sparsity_scale: 1.
   optimizer:
     name: AdamW
     args:
