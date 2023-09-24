@@ -194,7 +194,6 @@ def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs
     print(f'Surfaces/Kept: {len(mesh.faces)}/{len(values)}')
 
     mesh_o3d = o3d.io.read_triangle_mesh(old_mesh_file)
-    print("removing triangles by mask")
     mesh_o3d.remove_triangles_by_mask(mask_faces)
 
     o3d.io.write_triangle_mesh(new_mesh_file, mesh_o3d)
@@ -209,7 +208,21 @@ def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs
     new_mesh.export(new_mesh_file)
 
     o3d.io.write_triangle_mesh(new_mesh_file.replace(".ply", "_raw.ply"), mesh_o3d)
-    print("finishing removing triangles")
+
+def clean_outlier(final_mesh_file, output_mesh_file):
+    mesh_o3d = o3d.io.read_triangle_mesh(final_mesh_file)
+    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug) as cm:
+        triangle_clusters, cluster_n_triangles, cluster_area = (mesh_o3d.cluster_connected_triangles())
+    triangle_clusters = np.asarray(triangle_clusters)
+    cluster_n_triangles = np.asarray(cluster_n_triangles)
+    cluster_area = np.asarray(cluster_area)
+    print(cluster_n_triangles)
+
+    triangles_to_remove = cluster_n_triangles[triangle_clusters] < 2000
+    mesh_o3d.remove_triangles_by_mask(triangles_to_remove)
+
+    o3d.io.write_triangle_mesh(output_mesh_file, mesh_o3d)
+
 
 if __name__ == "__main__":
 
@@ -231,10 +244,12 @@ if __name__ == "__main__":
         scale_mesh_file = os.path.join(exp_path, "world_%03d.ply" % scan)
         clean_mesh_file = os.path.join(exp_path, "clean_%03d.ply" % scan)
         final_mesh_file = os.path.join(exp_path, "final_%03d.ply" % scan)
+        output_mesh_file = os.path.join(exp_path, "eval_%03d.ply" % scan)
 
         scale(dtu_dir, tmp, old_mesh_file, scale_mesh_file, scan)
         clean_mesh_faces_by_mask(dtu_dir, scale_mesh_file, clean_mesh_file, scan, imgs_idx, minimal_vis=1,
                                  mask_dilated_size=mask_kernel_size)
         clean_mesh_faces_outside_frustum(dtu_dir, clean_mesh_file, final_mesh_file, imgs_idx, mask_dilated_size=mask_kernel_size)
+        clean_outlier(final_mesh_file, output_mesh_file)
 
         print("finish processing scan%d" % scan)
