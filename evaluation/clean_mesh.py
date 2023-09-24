@@ -46,9 +46,8 @@ def gen_rays_from_single_image(H, W, image, intrinsic, c2w, depth=None, mask=Non
         'rays_v': rays_v,
         'rays_ndc_uv': rays_ndc_uv,
         'rays_color': color,
-        # 'rays_depth': depth,
         'rays_mask': mask,
-        'rays_norm_XYZ_cam': p  # - XYZ_cam, before multiply depth
+        'rays_norm_XYZ_cam': p
     }
     if depth is not None:
         sample['rays_depth'] = depth
@@ -112,6 +111,7 @@ def clean_mesh_faces_by_mask(dtu_dir, mesh_file, new_mesh_file, scan, imgs_idx, 
     old_mesh = trimesh.load(mesh_file)
     old_vertices = old_mesh.vertices[:]
     old_faces = old_mesh.faces[:]
+    old_color = old_mesh.visual.vertex_colors[:]
 
     mask = clean_points_by_mask(dtu_dir, old_vertices, scan, imgs_idx, minimal_vis, mask_dilated_size)
     indexes = np.ones(len(old_vertices)) * -1
@@ -124,8 +124,9 @@ def clean_mesh_faces_by_mask(dtu_dir, mesh_file, new_mesh_file, scan, imgs_idx, 
     new_faces[:, 1] = indexes[new_faces[:, 1]]
     new_faces[:, 2] = indexes[new_faces[:, 2]]
     new_vertices = old_vertices[np.where(mask)]
+    new_color = old_color[np.where(mask)]
 
-    new_mesh = trimesh.Trimesh(new_vertices, new_faces)
+    new_mesh = trimesh.Trimesh(new_vertices, new_faces, vertex_colors=new_color)
 
     new_mesh.export(new_mesh_file)
 
@@ -137,12 +138,13 @@ def scale(dtu_dir, tmp, old_mesh_file, scale_mesh_file, scan):
 
     old_vertices = old_mesh.vertices[:]
     old_faces = old_mesh.faces[:]
+    old_color = old_mesh.visual.vertex_colors[:]
 
     camera_dict = np.load(os.path.join(dtu_dir, f'dtu_scan{scan}', 'cameras_sphere.npz'))
     scale_mats_np = camera_dict['scale_mat_0'].astype(np.float32)
     vertices = old_vertices * scale_mats_np[0, 0] + scale_mats_np[:3, 3][None]
 
-    mesh = trimesh.Trimesh(vertices, old_faces)
+    mesh = trimesh.Trimesh(vertices, old_faces, vertex_colors=old_color)
     mesh.export(scale_mesh_file)
 
 def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs_idx, H=1200, W=1600, mask_dilated_size=11):
@@ -209,14 +211,13 @@ def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs
     o3d.io.write_triangle_mesh(new_mesh_file.replace(".ply", "_raw.ply"), mesh_o3d)
     print("finishing removing triangles")
 
-
 if __name__ == "__main__":
 
-    scans = [118]
+    scans = [122]
     mask_kernel_size = 11
 
     dtu_dir = "load/DTU"
-    exp_paths = ["exp/neus-dtu-wmask-dtu_scan118/@20230924-103904/save"]
+    exp_paths = ["exp/neus-dtu-wmask-dtu_scan122/@20230924-103744/save"]
 
     for scan, exp_path in zip(scans, exp_paths):
         print("processing scan%d" % scan)
