@@ -208,6 +208,7 @@ def clean_mesh_faces_outside_frustum(dtu_dir, old_mesh_file, new_mesh_file, imgs
     new_mesh.export(new_mesh_file)
 
     o3d.io.write_triangle_mesh(new_mesh_file.replace(".ply", "_raw.ply"), mesh_o3d)
+    return new_mesh_file.replace(".ply", "_raw.ply")
 
 def clean_outlier(final_mesh_file, output_mesh_file):
     mesh_o3d = o3d.io.read_triangle_mesh(final_mesh_file)
@@ -226,11 +227,11 @@ def clean_outlier(final_mesh_file, output_mesh_file):
 
 if __name__ == "__main__":
 
-    scans = [122]
+    scans = [105]
     mask_kernel_size = 11
 
     dtu_dir = "load/DTU"
-    exp_paths = ["exp/neus-dtu-wmask-dtu_scan122/@20230924-103744/save"]
+    exp_paths = ["exp/neus-dtu-wmask-dtu_scan105/@20230924-113016/save"]
 
     for scan, exp_path in zip(scans, exp_paths):
         print("processing scan%d" % scan)
@@ -249,7 +250,13 @@ if __name__ == "__main__":
         scale(dtu_dir, tmp, old_mesh_file, scale_mesh_file, scan)
         clean_mesh_faces_by_mask(dtu_dir, scale_mesh_file, clean_mesh_file, scan, imgs_idx, minimal_vis=1,
                                  mask_dilated_size=mask_kernel_size)
-        clean_mesh_faces_outside_frustum(dtu_dir, clean_mesh_file, final_mesh_file, imgs_idx, mask_dilated_size=mask_kernel_size)
+        final_raw_mesh_file = clean_mesh_faces_outside_frustum(dtu_dir, clean_mesh_file, final_mesh_file, imgs_idx, mask_dilated_size=mask_kernel_size)
         clean_outlier(final_mesh_file, output_mesh_file)
+
+        os.remove(tmp)
+        os.remove(scale_mesh_file)
+        os.remove(clean_mesh_file)
+        os.remove(final_mesh_file)
+        os.remove(final_raw_mesh_file)
 
         print("finish processing scan%d" % scan)
