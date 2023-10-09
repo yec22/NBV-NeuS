@@ -179,7 +179,8 @@ class NeuSSystem(BaseSystem):
             {'type': 'rgb', 'img': out['comp_rgb_bg'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': out['comp_rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
         ] if self.config.model.learned_background else []) + [
-            {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': out['opacity'].view(H, W), 'kwargs': {'cmap': 'jet', 'data_range': (0, 1)}},
+            {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {'cmap': 'jet'}},
             {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
         ])
         return {

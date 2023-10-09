@@ -119,6 +119,7 @@ class DTUDatasetBase():
             self.all_images.append(img)
 
         self.all_c2w = torch.stack(self.all_c2w, dim=0)
+        self.sparse_view = self.config.get('sparse_view', None)
 
         # take the last image as test image
         if self.split == 'test':
@@ -137,6 +138,13 @@ class DTUDatasetBase():
             self.all_images = self.all_images[:,...]
             self.all_fg_masks = self.all_fg_masks[:,...]
             self.directions = self.directions[:,...]
+
+            # only train with limited views
+            if self.sparse_view and self.split == 'train':
+                self.all_c2w = self.all_c2w[self.sparse_view,...]
+                self.all_images = self.all_images[self.sparse_view,...]
+                self.all_fg_masks = self.all_fg_masks[self.sparse_view,...]
+                self.directions = self.directions[self.sparse_view,...]
 
         self.directions = self.directions.float().to(self.rank)
         self.all_c2w, self.all_images, self.all_fg_masks = \
@@ -177,7 +185,7 @@ class DTUDataModule(pl.LightningDataModule):
         if stage in [None, 'fit']:
             self.train_dataset = DTUIterableDataset(self.config, 'train')
         if stage in [None, 'fit', 'validate']:
-            self.val_dataset = DTUDataset(self.config, self.config.get('val_split', 'train'))
+            self.val_dataset = DTUDataset(self.config, self.config.get('val_split', 'val'))
         if stage in [None, 'test']:
             self.test_dataset = DTUDataset(self.config, self.config.get('test_split', 'test'))
         if stage in [None, 'predict']:

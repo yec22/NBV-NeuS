@@ -66,9 +66,21 @@ class BlenderDatasetBase():
             self.all_images.append(img[...,:3]) # (h, w, 3) -> RGB
 
         self.all_c2w, self.all_images, self.all_fg_masks = \
-            torch.stack(self.all_c2w, dim=0).float().to(self.rank), \
-            torch.stack(self.all_images, dim=0).float().to(self.rank), \
-            torch.stack(self.all_fg_masks, dim=0).float().to(self.rank)
+            torch.stack(self.all_c2w, dim=0), \
+            torch.stack(self.all_images, dim=0), \
+            torch.stack(self.all_fg_masks, dim=0)
+
+        self.sparse_view = self.config.get('sparse_view', None)
+        # only train with limited views
+        if self.sparse_view and self.split == 'train':
+            self.all_c2w = self.all_c2w[self.sparse_view,...]
+            self.all_images = self.all_images[self.sparse_view,...]
+            self.all_fg_masks = self.all_fg_masks[self.sparse_view,...]
+
+        self.all_c2w, self.all_images, self.all_fg_masks = \
+            self.all_c2w.float().to(self.rank), \
+            self.all_images.float().to(self.rank), \
+            self.all_fg_masks.float().to(self.rank)
         
 
 class BlenderDataset(Dataset, BlenderDatasetBase):
