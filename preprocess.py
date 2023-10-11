@@ -111,58 +111,75 @@ class DepthEstimator:
         prediction = self.process(image, original_image_rgb.shape[1::-1])
         return prediction
     
-def process_single_image(image_path, depth_estimator, normal_estimator=None):
-    out_dir = os.path.dirname(image_path)
-    rgba_path = os.path.join(out_dir, 'rgba.png')
-    depth_path = os.path.join(out_dir, 'depth.png')
+def process_single_image(image_path, depth_estimator):
+    out_dir = os.path.dirname(os.path.dirname(image_path))
+    image_name = image_path.split('/')[-1]
 
-    if os.path.exists(rgba_path):
-        print(f'[INFO] loading rgba image {rgba_path}...')
-        rgba = cv2.cvtColor(cv2.imread(rgba_path, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA)
-        image = cv2.cvtColor(rgba, cv2.COLOR_RGBA2RGB)
+    depth_path = os.path.join(out_dir, 'depth')
+    os.makedirs(depth_path, exist_ok=True)
+    depth_img_path = os.path.join(depth_path, image_name)
 
+    print(f'[INFO] loading image {image_path}...')
+    image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+    if image.shape[-1] == 4:
+        rgba = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
     else:
-        print(f'[INFO] loading image {image_path}...')
-        image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
-        if image.shape[-1] == 4:
-            rgba = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
-            image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
-        else:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            print(f'[INFO] background removal...')
-            rgba = BackgroundRemoval()(image)  # [H, W, 4]
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        print(f'[INFO] background removal...')
+        rgba = BackgroundRemoval()(image)  # [H, W, 4]
 
     # Predict depth using Midas
     mask = rgba[..., -1] > 0
-    depth = depth_estimator.get_monocular_depth(image/255)
+    depth = depth_estimator.get_monocular_depth(image / 255)
     depth[mask] = (depth[mask] - depth[mask].min()) / (depth[mask].max() - depth[mask].min() + 1e-9)
     depth[~mask] = 0
     depth = (depth * 255).astype(np.uint8)
-     
-    height, width, _ = image.shape
 
-    cv2.imwrite(depth_path, depth)
+    cv2.imwrite(depth_img_path, depth)
 
-    if not os.path.exists(rgba_path):
-        cv2.imwrite(rgba_path, cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+def gen_dtu_rgba(path="load/DTU/dtu_scan105"):
+    image_path = os.path.join(path, 'image')
+    image_list = sorted(os.listdir(image_path))
+
+    mask_path = os.path.join(path, 'mask')
+    mask_list = sorted(os.listdir(mask_path))
+
+    rgba_path = os.path.join(path, 'rgba')
+    os.makedirs(rgba_path, exist_ok=True)
+
+    for i in range(len(image_list)):
+        rgb = cv2.imread(os.path.join(image_path, image_list[i]), cv2.IMREAD_UNCHANGED)
+        mask = cv2.imread(os.path.join(mask_path, mask_list[i]), cv2.IMREAD_UNCHANGED)[...,0]
+
+        mask[mask < 127] = 0
+        rgb[mask < 127] = 255
+
+        rgba = cv2.cvtColor(rgb, cv2.COLOR_BGR2BGRA)
+        rgba[:, :, 3] = mask
+
+        rgba = cv2.resize(rgba, (800, 600))
+        cv2.imwrite(os.path.join(rgba_path, image_list[i]), rgba)
 
 if __name__ == '__main__':
     import glob
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', default=None, type=str, nargs='*', help="path to image (png, jpeg, etc.)")
     parser.add_argument('--folder', default=None, type=str, help="path to a folder of image (png, jpeg, etc.)")
-    parser.add_argument('--imagepattern', default="image.png", type=str, help="image name pattern")
+    parser.add_argument('--imagepattern', default="*.png", type=str, help="image name pattern")
     parser.add_argument('--exclude', default='', type=str, nargs='*', help="path to image (png, jpeg, etc.) to exclude")
     opt = parser.parse_args()
+
+    # gen_dtu_rgba(path="load/DTU/dtu_scan105")
 
     depth_estimator = DepthEstimator()
     
     if opt.path is not None:
         paths = opt.path
     else:
-        paths = glob.glob(os.path.join(opt.folder, f'*/{opt.imagepattern}')) 
+        paths = glob.glob(os.path.join(opt.folder, f'{opt.imagepattern}')) 
         for exclude_path in opt.exclude:
             if exclude_path in paths:
-                del paths[exclude_path] 
-    for path in paths:
+                del paths[exclude_path]
+    for path in sorted(paths):
         process_single_image(path, depth_estimator)

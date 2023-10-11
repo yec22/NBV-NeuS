@@ -81,9 +81,12 @@ class DTUDatasetBase():
         mask_dir = os.path.join(self.config.root_dir, 'mask')
         self.has_mask = True
         self.apply_mask = self.config.apply_mask
+
+        depth_dir = os.path.join(self.config.root_dir, 'depth')
         
         self.directions = []
         self.all_c2w, self.all_images, self.all_fg_masks = [], [], []
+        self.pred_depths = []
 
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
 
@@ -115,8 +118,14 @@ class DTUDatasetBase():
             mask = mask.resize(self.img_wh, Image.BICUBIC)
             mask = TF.to_tensor(mask)[0]
 
+            pred_depth_path = os.path.join(depth_dir, f'{i:06d}.png')
+            depth = Image.open(pred_depth_path).convert('L') # (H, W, 1)
+            depth = depth.resize(self.img_wh, Image.BICUBIC)
+            depth = TF.to_tensor(depth)[0]
+
             self.all_fg_masks.append(mask) # (h, w)
             self.all_images.append(img)
+            self.pred_depths.append(depth)
 
         self.all_c2w = torch.stack(self.all_c2w, dim=0)
         self.sparse_view = self.config.get('sparse_view', None)
@@ -124,18 +133,22 @@ class DTUDatasetBase():
         # take the last image as test image
         if self.split == 'test':
             self.all_images, self.all_fg_masks = torch.stack(self.all_images, dim=0), torch.stack(self.all_fg_masks, dim=0)  
+            self.pred_depths = torch.stack(self.pred_depths, dim=0)
             self.directions = torch.stack(self.directions, dim=0)
 
             self.all_c2w = self.all_c2w[-1:,...]
             self.all_images = self.all_images[-1:,...]
+            self.pred_depths = self.pred_depths[-1:,...]
             self.all_fg_masks = self.all_fg_masks[-1:,...]
             self.directions = self.directions[-1:,...]
         else:
             self.all_images, self.all_fg_masks = torch.stack(self.all_images, dim=0), torch.stack(self.all_fg_masks, dim=0)  
+            self.pred_depths = torch.stack(self.pred_depths, dim=0)
             self.directions = torch.stack(self.directions, dim=0)
 
             self.all_c2w = self.all_c2w[:,...]
             self.all_images = self.all_images[:,...]
+            self.pred_depths = self.pred_depths[:,...]
             self.all_fg_masks = self.all_fg_masks[:,...]
             self.directions = self.directions[:,...]
 
@@ -143,10 +156,12 @@ class DTUDatasetBase():
             if self.sparse_view and self.split == 'train':
                 self.all_c2w = self.all_c2w[self.sparse_view,...]
                 self.all_images = self.all_images[self.sparse_view,...]
+                self.pred_depths = self.pred_depths[self.sparse_view,...]
                 self.all_fg_masks = self.all_fg_masks[self.sparse_view,...]
                 self.directions = self.directions[self.sparse_view,...]
 
         self.directions = self.directions.float().to(self.rank)
+        self.pred_depths = self.pred_depths.float().to(self.rank)
         self.all_c2w, self.all_images, self.all_fg_masks = \
             self.all_c2w.float().to(self.rank), \
             self.all_images.float().to(self.rank), \

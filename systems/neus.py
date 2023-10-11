@@ -2,17 +2,53 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_efficient_distloss import flatten_eff_distloss
-
+import numpy as np
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.rank_zero import rank_zero_info, rank_zero_debug
-
 import models
 from models.utils import cleanup
 from models.ray_utils import get_rays
 import systems
 from systems.base import BaseSystem
 from systems.criterions import PSNR, binary_cross_entropy
+import cv2
+from math import sqrt
 
+def compute_scale_and_shift(prediction, target, mask):
+    # system matrix: A = [[a_00, a_01], [a_10, a_11]]
+    a_00 = torch.sum(mask * prediction * prediction, (1, 2))
+    a_01 = torch.sum(mask * prediction, (1, 2))
+    a_11 = torch.sum(mask, (1, 2))
+
+    # right hand side: b = [b_0, b_1]
+    b_0 = torch.sum(mask * prediction * target, (1, 2))
+    b_1 = torch.sum(mask * target, (1, 2))
+
+    # solution: x = A^-1 . b = [[a_11, -a_01], [-a_10, a_00]] / (a_00 * a_11 - a_01 * a_10) . b
+    x_0 = torch.zeros_like(b_0)
+    x_1 = torch.zeros_like(b_1)
+
+    det = a_00 * a_11 - a_01 * a_01
+    valid = det.nonzero()
+
+    x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
+    x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
+
+    return x_0, x_1
+
+class ScaleAndShiftInvariantLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, prediction, target, mask):
+        scale, shift = compute_scale_and_shift(prediction, target, mask)
+        self.prediction_depth = scale.view(-1, 1, 1) * prediction + shift.view(-1, 1, 1)
+        
+        depth_error = (self.prediction_depth - target) * mask
+        depth_error = depth_error.reshape(1, -1).permute(1, 0)
+        depth_loss = F.l1_loss(depth_error, torch.zeros_like(depth_error), reduction='sum') / (mask.sum() + 1e-5)
+
+        return depth_loss
 
 @systems.register('neus-system')
 class NeuSSystem(BaseSystem):
@@ -54,6 +90,7 @@ class NeuSSystem(BaseSystem):
             rays_o, rays_d = get_rays(directions, c2w)
             rgb = self.dataset.all_images[index, y, x].view(-1, self.dataset.all_images.shape[-1]).to(self.rank)
             fg_mask = self.dataset.all_fg_masks[index, y, x].view(-1).to(self.rank)
+            pred_depth = self.dataset.pred_depths[index, y, x].view(-1).to(self.rank)
         else:
             c2w = self.dataset.all_c2w[index][0]
             if self.dataset.directions.ndim == 3: # (H, W, 3)
@@ -63,6 +100,7 @@ class NeuSSystem(BaseSystem):
             rays_o, rays_d = get_rays(directions, c2w)
             rgb = self.dataset.all_images[index].view(-1, self.dataset.all_images.shape[-1]).to(self.rank)
             fg_mask = self.dataset.all_fg_masks[index].view(-1).to(self.rank)
+            pred_depth = self.dataset.pred_depths[index].view(-1).to(self.rank)
 
         rays = torch.cat([rays_o, F.normalize(rays_d, p=2, dim=-1)], dim=-1)
 
@@ -82,11 +120,14 @@ class NeuSSystem(BaseSystem):
         batch.update({
             'rays': rays,
             'rgb': rgb,
-            'fg_mask': fg_mask
+            'fg_mask': fg_mask,
+            'pred_depth': pred_depth
         })      
     
     def training_step(self, batch, batch_idx):
         out = self(batch)
+        batch_size = batch['fg_mask'].shape[0]
+        reshape_batch_size = int(sqrt(batch_size)) * int(sqrt(batch_size))
 
         loss = 0.
 
@@ -106,7 +147,16 @@ class NeuSSystem(BaseSystem):
         loss_eikonal = ((torch.linalg.norm(out['sdf_grad_samples'], ord=2, dim=-1) - 1.)**2).mean()
         self.log('train/loss_eikonal', loss_eikonal)
         loss += loss_eikonal * self.C(self.config.system.loss.lambda_eikonal)
-        
+
+        depth_render = out['depth'][:reshape_batch_size,...].squeeze().reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
+        depth_pred = batch['pred_depth'][:reshape_batch_size,...].reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
+        depth_mask = (batch['fg_mask'] > 0.5) & (out['depth'].squeeze() > 1e-3)
+        depth_mask = depth_mask[:reshape_batch_size,...].reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
+        depth_render[depth_mask] = 1. / depth_render[depth_mask]
+        loss_depth = ScaleAndShiftInvariantLoss()(depth_render, depth_pred, depth_mask)
+        self.log('train/loss_depth', loss_depth)
+        loss += loss_depth * self.C(self.config.get('system').get('loss').get('lambda_depth', 0))
+
         opacity = torch.clamp(out['opacity'].squeeze(-1), 1.e-3, 1.-1.e-3)
         loss_mask = binary_cross_entropy(opacity, batch['fg_mask'].float())
         self.log('train/loss_mask', loss_mask)
