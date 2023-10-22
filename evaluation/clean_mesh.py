@@ -231,7 +231,7 @@ if __name__ == "__main__":
     mask_kernel_size = 11
 
     dtu_dir = "load/DTU"
-    exp_paths = ["exp/neus-dtu-wmask-dtu_scan105/@20230924-113016/save"]
+    exp_paths = ["exp/neus-dtu-dtu_scan105/@20231016-171634/save"]
 
     for scan, exp_path in zip(scans, exp_paths):
         print("processing scan%d" % scan)
@@ -239,6 +239,7 @@ if __name__ == "__main__":
         n_images = 49 if scan < 83 else 64
         print('n_images', n_images)
         imgs_idx = [i for i in range(n_images)]
+        # imgs_idx = [0, 8, 18]
 
         old_mesh_file = glob(os.path.join(exp_path, "*.obj"))[0]
         tmp = old_mesh_file[:-4] + '.ply'

@@ -157,3 +157,39 @@ def binary_cross_entropy(input, target):
     F.binary_cross_entropy is not numerically stable in mixed-precision training.
     """
     return -(target * torch.log(input) + (1 - target) * torch.log(1 - input)).mean()
+
+def compute_scale_and_shift(prediction, target, mask):
+    # system matrix: A = [[a_00, a_01], [a_10, a_11]]
+    a_00 = torch.sum(mask * prediction * prediction, (1, 2))
+    a_01 = torch.sum(mask * prediction, (1, 2))
+    a_11 = torch.sum(mask, (1, 2))
+
+    # right hand side: b = [b_0, b_1]
+    b_0 = torch.sum(mask * prediction * target, (1, 2))
+    b_1 = torch.sum(mask * target, (1, 2))
+
+    # solution: x = A^-1 . b = [[a_11, -a_01], [-a_10, a_00]] / (a_00 * a_11 - a_01 * a_10) . b
+    x_0 = torch.zeros_like(b_0)
+    x_1 = torch.zeros_like(b_1)
+
+    det = a_00 * a_11 - a_01 * a_01
+    valid = det.nonzero()
+
+    x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
+    x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
+
+    return x_0, x_1
+
+class ScaleAndShiftInvariantLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, prediction, target, mask):
+        scale, shift = compute_scale_and_shift(prediction, target, mask)
+        self.prediction_depth = scale.view(-1, 1, 1) * prediction + shift.view(-1, 1, 1)
+        
+        depth_error = (self.prediction_depth - target) * mask
+        depth_error = depth_error.reshape(1, -1).permute(1, 0)
+        depth_loss = F.l1_loss(depth_error, torch.zeros_like(depth_error), reduction='sum') / (mask.sum() + 1e-5)
+
+        return depth_loss

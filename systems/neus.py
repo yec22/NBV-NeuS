@@ -10,45 +10,9 @@ from models.utils import cleanup
 from models.ray_utils import get_rays
 import systems
 from systems.base import BaseSystem
-from systems.criterions import PSNR, binary_cross_entropy
-import cv2
+from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvariantLoss
+import cv2, random
 from math import sqrt
-
-def compute_scale_and_shift(prediction, target, mask):
-    # system matrix: A = [[a_00, a_01], [a_10, a_11]]
-    a_00 = torch.sum(mask * prediction * prediction, (1, 2))
-    a_01 = torch.sum(mask * prediction, (1, 2))
-    a_11 = torch.sum(mask, (1, 2))
-
-    # right hand side: b = [b_0, b_1]
-    b_0 = torch.sum(mask * prediction * target, (1, 2))
-    b_1 = torch.sum(mask * target, (1, 2))
-
-    # solution: x = A^-1 . b = [[a_11, -a_01], [-a_10, a_00]] / (a_00 * a_11 - a_01 * a_10) . b
-    x_0 = torch.zeros_like(b_0)
-    x_1 = torch.zeros_like(b_1)
-
-    det = a_00 * a_11 - a_01 * a_01
-    valid = det.nonzero()
-
-    x_0[valid] = (a_11[valid] * b_0[valid] - a_01[valid] * b_1[valid]) / det[valid]
-    x_1[valid] = (-a_01[valid] * b_0[valid] + a_00[valid] * b_1[valid]) / det[valid]
-
-    return x_0, x_1
-
-class ScaleAndShiftInvariantLoss(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, prediction, target, mask):
-        scale, shift = compute_scale_and_shift(prediction, target, mask)
-        self.prediction_depth = scale.view(-1, 1, 1) * prediction + shift.view(-1, 1, 1)
-        
-        depth_error = (self.prediction_depth - target) * mask
-        depth_error = depth_error.reshape(1, -1).permute(1, 0)
-        depth_loss = F.l1_loss(depth_error, torch.zeros_like(depth_error), reduction='sum') / (mask.sum() + 1e-5)
-
-        return depth_loss
 
 @systems.register('neus-system')
 class NeuSSystem(BaseSystem):
@@ -68,35 +32,38 @@ class NeuSSystem(BaseSystem):
         return self.model(batch['rays'])
     
     def preprocess_data(self, batch, stage):
-        if 'index' in batch: # validation / testing
+        # determine index
+        if 'index' in batch: # test / validation
             index = batch['index']
-        else:
+        else: # train
             if self.config.model.batch_image_sampling:
-                index = torch.randint(0, len(self.dataset.all_images), size=(self.train_num_rays,), device=self.dataset.all_images.device)
+                index = torch.randint(0, len(self.dataset.all_images_train), size=(self.train_num_rays,), dtype=torch.int64, device=self.dataset.all_images_train.device)
             else:
-                index = torch.randint(0, len(self.dataset.all_images), size=(1,), device=self.dataset.all_images.device)
-        if stage in ['train']:
-            c2w = self.dataset.all_c2w[index]
+                index = torch.randint(0, len(self.dataset.all_images_train), size=(1,), dtype=torch.int64, device=self.dataset.all_images_train.device)
+        
+        # generate data pairs
+        if stage in ['train']: # train
+            c2w = self.dataset.all_c2w_train[index]
             x = torch.randint(
-                0, self.dataset.w, size=(self.train_num_rays,), device=self.dataset.all_images.device
+                0, self.dataset.w, size=(self.train_num_rays,), device=self.dataset.all_images_train.device
             )
             y = torch.randint(
-                0, self.dataset.h, size=(self.train_num_rays,), device=self.dataset.all_images.device
+                0, self.dataset.h, size=(self.train_num_rays,), device=self.dataset.all_images_train.device
             )
-            if self.dataset.directions.ndim == 3: # (H, W, 3)
-                directions = self.dataset.directions[y, x]
-            elif self.dataset.directions.ndim == 4: # (N, H, W, 3)
-                directions = self.dataset.directions[index, y, x]
+            if self.dataset.directions_train.ndim == 3: # (H, W, 3)
+                directions = self.dataset.directions_train[y, x]
+            elif self.dataset.directions_train.ndim == 4: # (N, H, W, 3)
+                directions = self.dataset.directions_train[index, y, x]
             rays_o, rays_d = get_rays(directions, c2w)
-            rgb = self.dataset.all_images[index, y, x].view(-1, self.dataset.all_images.shape[-1]).to(self.rank)
-            fg_mask = self.dataset.all_fg_masks[index, y, x].view(-1).to(self.rank)
-            pred_depth = self.dataset.pred_depths[index, y, x].view(-1).to(self.rank)
-        else:
+            rgb = self.dataset.all_images_train[index, y, x].view(-1, self.dataset.all_images_train.shape[-1]).to(self.rank)
+            fg_mask = self.dataset.all_fg_masks_train[index, y, x].view(-1).to(self.rank)
+            pred_depth = self.dataset.pred_depths_train[index, y, x].view(-1).to(self.rank)
+        else: # validation / test
             c2w = self.dataset.all_c2w[index][0]
             if self.dataset.directions.ndim == 3: # (H, W, 3)
                 directions = self.dataset.directions
             elif self.dataset.directions.ndim == 4: # (N, H, W, 3)
-                directions = self.dataset.directions[index][0] 
+                directions = self.dataset.directions[index][0]
             rays_o, rays_d = get_rays(directions, c2w)
             rgb = self.dataset.all_images[index].view(-1, self.dataset.all_images.shape[-1]).to(self.rank)
             fg_mask = self.dataset.all_fg_masks[index].view(-1).to(self.rank)
@@ -116,13 +83,13 @@ class NeuSSystem(BaseSystem):
         
         if self.dataset.apply_mask:
             rgb = rgb * fg_mask[...,None] + self.model.background_color * (1 - fg_mask[...,None])
-        
+
         batch.update({
             'rays': rays,
             'rgb': rgb,
             'fg_mask': fg_mask,
             'pred_depth': pred_depth
-        })      
+        })
     
     def training_step(self, batch, batch_idx):
         out = self(batch)
@@ -258,7 +225,16 @@ class NeuSSystem(BaseSystem):
                     for oi, index in enumerate(step_out['index']):
                         out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True)         
+            self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True, sync_dist=True)
+        
+        if self.initial_view:
+            select_view = random.sample(self.candidate_views, 1)[0]
+            self.candidate_views.remove(select_view)
+            self.initial_view.append(select_view)
+            self.dataset.update(self.initial_view, self.candidate_views)
+
+            print(self.initial_view)
+            
 
     def test_step(self, batch, batch_idx):
         out = self(batch)
@@ -296,7 +272,7 @@ class NeuSSystem(BaseSystem):
                     for oi, index in enumerate(step_out['index']):
                         out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True)    
+            self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True, sync_dist=True)    
 
             self.save_img_sequence(
                 f"it{self.global_step}-test",

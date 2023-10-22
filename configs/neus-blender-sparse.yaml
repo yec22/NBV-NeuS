@@ -1,19 +1,25 @@
-name: neus-dtu-wmask-${basename:${dataset.root_dir}}-8views
+name: neus-blender-${dataset.scene}-sparse
 tag: ""
 seed: 42
 
 dataset:
-  name: dtu
+  name: blender
   scene: ???
-  root_dir: ./load/DTU/${dataset.scene}
-  cameras_file: cameras_sphere.npz
-  img_downscale: 2 # specify training image size by either img_wh or img_downscale
-  apply_mask: true
-  sparse_view: [0, 2, 4, 16, 25, 51, 59, 63]
+  root_dir: ./load/nerf_synthetic/${dataset.scene}
+  img_wh:
+    - 800
+    - 800
+  # img_downscale: 1 # specify training image size by either img_wh or img_downscale
+  near_plane: 2.0
+  far_plane: 6.0
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  initial_view: [0, 2, 4, 6, 7, 13, 14, 25, 32, 76]
 
 model:
   name: neus
-  radius: 1.0
+  radius: 1.5
   num_samples_per_ray: 1024
   train_num_rays: 256
   max_train_num_rays: 8192
@@ -25,7 +31,7 @@ model:
   ray_chunk: 4096
   cos_anneal_end: 5000
   learned_background: false
-  background_color: white
+  background_color: random
   variance:
     init_val: 0.3
     modulate: false
@@ -63,7 +69,7 @@ model:
       otype: SphericalHarmonics
       degree: 4
     mlp_network_config:
-      otype: VanillaMLP
+      otype: FullyFusedMLP
       activation: ReLU
       output_activation: none
       n_neurons: 64
@@ -73,16 +79,14 @@ model:
 system:
   name: neus-system
   loss:
-    lambda_rgb_mse: 0.
-    lambda_rgb_l1: 1.
+    lambda_rgb_mse: 10.
+    lambda_rgb_l1: 0.
     lambda_mask: 0.1
     lambda_eikonal: 0.1
     lambda_curvature: 0.
     lambda_sparsity: 0.0
-    lambda_distortion: 0.0
-    lambda_distortion_bg: 0.0
-    lambda_opaque: 0.0
-    lambda_depth: 0.1
+    lambda_distortion: 0.
+    lambda_opaque: 0.
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -97,20 +101,21 @@ system:
         lr: 0.01
       variance:
         lr: 0.001
-  constant_steps: 1000
+  warmup_steps: 1000
   scheduler:
     name: SequentialLR
     interval: step
     milestones:
-      - ${system.constant_steps}
+      - ${system.warmup_steps}
     schedulers:
-      - name: ConstantLR
+      - name: LinearLR # linear warm-up in the first system.warmup_steps steps
         args:
-          factor: 1.0
-          total_iters: ${system.constant_steps}
+          start_factor: 0.01
+          end_factor: 1.0
+          total_iters: ${system.warmup_steps}
       - name: ExponentialLR
         args:
-          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.constant_steps}}}
+          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.warmup_steps}}}
 
 checkpoint:
   save_top_k: -1
@@ -124,8 +129,6 @@ trainer:
   max_steps: 5000
   log_every_n_steps: 100
   num_sanity_val_steps: 0
-  val_check_interval: 1000
-  limit_train_batches: 1.0
-  limit_val_batches: 5
+  val_check_interval: 5000
   enable_progress_bar: true
   precision: 16

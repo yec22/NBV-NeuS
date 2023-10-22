@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-
+import os, copy
 import models
 from systems.utils import parse_optimizer, parse_scheduler, update_module_step
 from utils.mixins import SaverMixin
@@ -18,6 +18,16 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         self.rank = get_rank()
         self.prepare()
         self.model = models.make(self.config.model.name, self.config.model)
+        initial_view = self.config.dataset.get('initial_view', None)
+        if initial_view:
+            self.initial_view = copy.deepcopy(initial_view)
+        else:
+            self.initial_view = None
+        self.n_images = len(os.listdir(os.path.join(self.config.dataset.root_dir, 'image')))
+        self.candidate_views = [i for i in range(self.n_images)]
+        if self.initial_view:
+            for elem in self.initial_view:
+                self.candidate_views.remove(elem)
     
     def prepare(self):
         pass
@@ -53,6 +63,7 @@ class BaseSystem(pl.LightningModule, SaverMixin):
     """
     def on_train_batch_start(self, batch, batch_idx, unused=0):
         self.dataset = self.trainer.datamodule.train_dataloader().dataset
+        self.dataset.update(self.initial_view, self.candidate_views)
         self.preprocess_data(batch, 'train')
         update_module_step(self.model, self.current_epoch, self.global_step)
     

@@ -1,5 +1,5 @@
 import os
-import json
+import json, copy
 import math
 import numpy as np
 from PIL import Image
@@ -73,6 +73,9 @@ class DTUDatasetBase():
             w, h = int(W / self.config.img_downscale + 0.5), int(H / self.config.img_downscale + 0.5)
         else:
             raise KeyError("Either img_wh or img_downscale should be specified.")
+        
+        if split == 'val':
+            w, h = w//4, h//4
 
         self.w, self.h = w, h
         self.img_wh = (w, h)
@@ -89,6 +92,8 @@ class DTUDatasetBase():
         self.pred_depths = []
 
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
+
+        self.candidate_views = [i for i in range(n_images)]
 
         for i in range(n_images):
             world_mat, scale_mat = cams[f'world_mat_{i}'], cams[f'scale_mat_{i}']
@@ -127,46 +132,99 @@ class DTUDatasetBase():
             self.all_images.append(img)
             self.pred_depths.append(depth)
 
-        self.all_c2w = torch.stack(self.all_c2w, dim=0)
-        self.sparse_view = self.config.get('sparse_view', None)
-
-        # take the last image as test image
-        if self.split == 'test':
-            self.all_images, self.all_fg_masks = torch.stack(self.all_images, dim=0), torch.stack(self.all_fg_masks, dim=0)  
-            self.pred_depths = torch.stack(self.pred_depths, dim=0)
-            self.directions = torch.stack(self.directions, dim=0)
-
-            self.all_c2w = self.all_c2w[-1:,...]
-            self.all_images = self.all_images[-1:,...]
-            self.pred_depths = self.pred_depths[-1:,...]
-            self.all_fg_masks = self.all_fg_masks[-1:,...]
-            self.directions = self.directions[-1:,...]
+        initial_view = self.config.get('initial_view', None)
+        if initial_view:
+            self.initial_view = copy.deepcopy(initial_view)
+            for elem in self.initial_view:
+                self.candidate_views.remove(elem)
         else:
-            self.all_images, self.all_fg_masks = torch.stack(self.all_images, dim=0), torch.stack(self.all_fg_masks, dim=0)  
-            self.pred_depths = torch.stack(self.pred_depths, dim=0)
-            self.directions = torch.stack(self.directions, dim=0)
+            self.initial_view = None
 
-            self.all_c2w = self.all_c2w[:,...]
-            self.all_images = self.all_images[:,...]
-            self.pred_depths = self.pred_depths[:,...]
-            self.all_fg_masks = self.all_fg_masks[:,...]
-            self.directions = self.directions[:,...]
+        self.all_c2w_all = torch.stack(self.all_c2w, dim=0)
+        self.all_images_all = torch.stack(self.all_images, dim=0)
+        self.all_fg_masks_all = torch.stack(self.all_fg_masks, dim=0)  
+        self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
+        self.directions_all = torch.stack(self.directions, dim=0)
 
-            # only train with limited views
-            if self.sparse_view and self.split == 'train':
-                self.all_c2w = self.all_c2w[self.sparse_view,...]
-                self.all_images = self.all_images[self.sparse_view,...]
-                self.pred_depths = self.pred_depths[self.sparse_view,...]
-                self.all_fg_masks = self.all_fg_masks[self.sparse_view,...]
-                self.directions = self.directions[self.sparse_view,...]
-
-        self.directions = self.directions.float().to(self.rank)
-        self.pred_depths = self.pred_depths.float().to(self.rank)
-        self.all_c2w, self.all_images, self.all_fg_masks = \
-            self.all_c2w.float().to(self.rank), \
-            self.all_images.float().to(self.rank), \
-            self.all_fg_masks.float().to(self.rank)
+        # only train with limited views
+        if self.split == 'train':
+            if self.initial_view:
+                self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
+                self.all_images_train = self.all_images_all[self.initial_view,...]
+                self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
+                self.directions_train = self.directions_all[self.initial_view,...]
+            else:
+                self.all_c2w_train = self.all_c2w_all
+                self.all_images_train = self.all_images_all
+                self.pred_depths_train = self.pred_depths_all
+                self.all_fg_masks_train = self.all_fg_masks_all
+                self.directions_train = self.directions_all
         
+        # only validate with candidate views
+        elif self.split == 'val':
+            self.all_c2w = self.all_c2w_all[self.candidate_views,...]
+            self.all_images = self.all_images_all[self.candidate_views,...]
+            self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+            self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
+            self.directions = self.directions_all[self.candidate_views,...]
+        
+        else: # test
+            self.all_c2w = self.all_c2w_all[-1:,...]
+            self.all_images = self.all_images_all[-1:,...]
+            self.pred_depths = self.pred_depths_all[-1:,...]
+            self.all_fg_masks = self.all_fg_masks_all[-1:,...]
+            self.directions = self.directions_all[-1:,...]
+        
+        if self.split == 'train':
+            self.directions_train = self.directions_train.float().to(self.rank)
+            self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+            self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
+                self.all_c2w_train.float().to(self.rank), \
+                self.all_images_train.float().to(self.rank), \
+                self.all_fg_masks_train.float().to(self.rank)
+        else:
+            self.directions = self.directions.float().to(self.rank)
+            self.pred_depths = self.pred_depths.float().to(self.rank)
+            self.all_c2w, self.all_images, self.all_fg_masks = \
+                self.all_c2w.float().to(self.rank), \
+                self.all_images.float().to(self.rank), \
+                self.all_fg_masks.float().to(self.rank)
+
+    def update(self, initial_view, candidate_views):
+        if self.initial_view and (self.initial_view != initial_view):
+            self.initial_view = copy.deepcopy(initial_view)
+            self.candidate_views = copy.deepcopy(candidate_views)
+
+            if self.split == 'train':
+                self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
+                self.all_images_train = self.all_images_all[self.initial_view,...]
+                self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
+                self.directions_train = self.directions_all[self.initial_view,...]
+            
+            if self.split == 'val':
+                self.all_c2w = self.all_c2w_all[self.candidate_views,...]
+                self.all_images = self.all_images_all[self.candidate_views,...]
+                self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+                self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
+                self.directions = self.directions_all[self.candidate_views,...]
+            
+            if self.split == 'train':
+                self.directions_train = self.directions_train.float().to(self.rank)
+                self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+                self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
+                    self.all_c2w_train.float().to(self.rank), \
+                    self.all_images_train.float().to(self.rank), \
+                    self.all_fg_masks_train.float().to(self.rank)
+            else:
+                self.directions = self.directions.float().to(self.rank)
+                self.pred_depths = self.pred_depths.float().to(self.rank)
+                self.all_c2w, self.all_images, self.all_fg_masks = \
+                    self.all_c2w.float().to(self.rank), \
+                    self.all_images.float().to(self.rank), \
+                    self.all_fg_masks.float().to(self.rank)
+
 
 class DTUDataset(Dataset, DTUDatasetBase):
     def __init__(self, config, split):

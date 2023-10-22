@@ -97,7 +97,7 @@ def eval_cloud(args, num_cpu_cores=-1):
 
     pbar.update(1)
     pbar.set_description('masking data pcd')
-    obs_mask_file = loadmat(f'{args.dataset_dir}/ObsMask/ObsMask{args.scan}_10.mat')
+    obs_mask_file = loadmat(f'{args.dataset_dir}/SampleSet/MVS_Data/ObsMask/ObsMask{args.scan}_10.mat')
     ObsMask, BB, Res = [obs_mask_file[attr] for attr in ['ObsMask', 'BB', 'Res']]
     BB = BB.astype(np.float32)
 
@@ -125,7 +125,7 @@ def eval_cloud(args, num_cpu_cores=-1):
 
     pbar.update(1)
     pbar.set_description('compute stl2data')
-    ground_plane = loadmat(f'{args.dataset_dir}/ObsMask/Plane{args.scan}.mat')['P']
+    ground_plane = loadmat(f'{args.dataset_dir}/SampleSet/MVS_Data/ObsMask/Plane{args.scan}.mat')['P']
 
     stl_hom = np.concatenate([stl, np.ones_like(stl[:, :1])], -1)
     above = (ground_plane.reshape((1, 4)) * stl_hom).sum(-1) > 0
@@ -191,17 +191,17 @@ if __name__ == '__main__':
     parser.add_argument('--log', type=str, default=None)
     args = parser.parse_args()
 
-    base_dir = "./exp"
-    GT_DIR = "./gt_pcd"
+    base_dir = "exp/neus-dtu-dtu_scan105/@20231016-171634/save"
+    args.dataset_dir = "/data/yesheng/3D-Scene/data/DTU_gt_pcd"
 
-    scans = [24, 37, 40, 55, 63, 65, 69, 83, 97, 105, 106, 110, 114, 118, 122]
+    scans = [105]
     for scan in scans:
 
         print("processing scan%d" % scan)
 
-        args.data = os.path.join(base_dir, "scan{}".format(scan), "final_%03d.ply" % scan)
-        args.gt = os.path.join(GT_DIR, "stl%03d_total.ply" % scan)
-        args.vis_out_dir = os.path.join(base_dir, "scan{}".format(scan))
+        args.data = os.path.join(base_dir, "eval_{}.ply".format(scan))
+        args.gt = os.path.join(args.dataset_dir, "stl", "stl%03d_total.ply" % scan)
+        args.vis_out_dir = os.path.join(base_dir, "vis")
         args.scan = scan
         os.makedirs(args.vis_out_dir, exist_ok=True)
 
@@ -267,7 +267,7 @@ if __name__ == '__main__':
 
         pbar.update(1)
         pbar.set_description('masking data pcd')
-        obs_mask_file = loadmat(f'{args.dataset_dir}/ObsMask/ObsMask{args.scan}_10.mat')
+        obs_mask_file = loadmat(f'{args.dataset_dir}/SampleSet/MVS_Data/ObsMask/ObsMask{args.scan}_10.mat')
         ObsMask, BB, Res = [obs_mask_file[attr] for attr in ['ObsMask', 'BB', 'Res']]
         BB = BB.astype(np.float32)
 
@@ -298,7 +298,7 @@ if __name__ == '__main__':
 
         pbar.update(1)
         pbar.set_description('compute stl2data')
-        ground_plane = loadmat(f'{args.dataset_dir}/ObsMask/Plane{args.scan}.mat')['P']
+        ground_plane = loadmat(f'{args.dataset_dir}/SampleSet/MVS_Data/ObsMask/Plane{args.scan}.mat')['P']
 
         stl_hom = np.concatenate([stl, np.ones_like(stl[:, :1])], -1)
         above = (ground_plane.reshape((1, 4)) * stl_hom).sum(-1) > 0
@@ -333,12 +333,12 @@ if __name__ == '__main__':
         pbar.update(1)
         pbar.set_description('done')
         pbar.close()
-        over_all = (mean_d2s + mean_s2d) / 2
+        chamfer_distance = (mean_d2s + mean_s2d) / 2
 
         fscore_1 = 2 * precision_1 * recall_1 / (precision_1 + recall_1 + 1e-6)
         fscore_2 = 2 * precision_2 * recall_2 / (precision_2 + recall_2 + 1e-6)
 
-        print(f'over_all: {over_all}; mean_d2gt: {mean_d2s}; mean_gt2d: {mean_s2d}.')
+        print(f'chamfer_distance: {chamfer_distance}; mean_d2gt: {mean_d2s}; mean_gt2d: {mean_s2d}.')
         print(f'precision_1mm: {precision_1};  recall_1mm: {recall_1};  fscore_1mm: {fscore_1}')
         print(f'precision_2mm: {precision_2};  recall_2mm: {recall_2};  fscore_2mm: {fscore_2}')
 
@@ -347,8 +347,8 @@ if __name__ == '__main__':
             path_log = os.path.join(pparent, 'eval_result.txt')
         else:
             path_log = args.log
-        with open(path_log, 'w+') as fLog:
-            fLog.write(f'over_all {np.round(over_all, 3)} '
+        with open(path_log, 'w') as fLog:
+            fLog.write(f'chamfer_distance {np.round(chamfer_distance, 3)} '
                        f'mean_d2gt {np.round(mean_d2s, 3)} '
                        f'mean_gt2d {np.round(mean_s2d, 3)} \n'
                        f'precision_1mm {np.round(precision_1, 3)} '

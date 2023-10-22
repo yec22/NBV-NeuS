@@ -70,12 +70,12 @@ class BlenderDatasetBase():
             torch.stack(self.all_images, dim=0), \
             torch.stack(self.all_fg_masks, dim=0)
 
-        self.sparse_view = self.config.get('sparse_view', None)
+        self.initial_view = self.config.get('initial_view', None)
         # only train with limited views
-        if self.sparse_view and self.split == 'train':
-            self.all_c2w = self.all_c2w[self.sparse_view,...]
-            self.all_images = self.all_images[self.sparse_view,...]
-            self.all_fg_masks = self.all_fg_masks[self.sparse_view,...]
+        if self.initial_view and self.split == 'train':
+            self.all_c2w = self.all_c2w[self.initial_view,...]
+            self.all_images = self.all_images[self.initial_view,...]
+            self.all_fg_masks = self.all_fg_masks[self.initial_view,...]
 
         self.all_c2w, self.all_images, self.all_fg_masks = \
             self.all_c2w.float().to(self.rank), \

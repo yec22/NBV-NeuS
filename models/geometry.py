@@ -144,7 +144,11 @@ class VolumeDensity(BaseImplicitGeometry):
 class VolumeSDF(BaseImplicitGeometry):
     def setup(self):
         self.n_output_dims = self.config.feature_dim
+        self.include_xyz = self.config.xyz_encoding_config.get('include_xyz', False)
+        self.epoch, self.global_step = 0., 0.
+        self.T = self.config.xyz_encoding_config.get('T', 1)
         encoding = get_encoding(3, self.config.xyz_encoding_config)
+        self.enc_dim = encoding.n_output_dims
         network = get_mlp(encoding.n_output_dims, self.n_output_dims, self.config.mlp_network_config)
         self.encoding, self.network = encoding, network
         self.grad_type = self.config.grad_type
@@ -166,7 +170,14 @@ class VolumeSDF(BaseImplicitGeometry):
                 points_ = points # points in the original scale
                 points = contract_to_unisphere(points, self.radius, self.contraction_type) # points normalized to (0, 1)
                 
-                out = self.network(self.encoding(points.view(-1, 3))).view(*points.shape[:-1], self.n_output_dims).float()
+                pos_enc = self.encoding(points.view(-1, 3))
+                # progress: [0, 1]
+                progress = min(self.global_step + 1, self.T) / self.T
+                if self.include_xyz:
+                    pos_enc[:, int(progress*(self.enc_dim-3))+3:] = 0
+                else:
+                    pos_enc[:, int(progress*self.enc_dim):] = 0
+                out = self.network(pos_enc).view(*points.shape[:-1], self.n_output_dims).float()
                 sdf, feature = out[...,0], out
                 if 'sdf_activation' in self.config:
                     sdf = get_activation(self.config.sdf_activation)(sdf + float(self.config.sdf_bias))
@@ -217,8 +228,10 @@ class VolumeSDF(BaseImplicitGeometry):
         return sdf
 
     def update_step(self, epoch, global_step):
-        update_module_step(self.encoding, epoch, global_step)    
-        update_module_step(self.network, epoch, global_step)  
+        self.epoch = epoch
+        self.global_step = global_step
+        update_module_step(self.encoding, epoch, global_step)
+        update_module_step(self.network, epoch, global_step)
         if self.grad_type == 'finite_difference':
             if isinstance(self.finite_difference_eps, float):
                 self._finite_difference_eps = self.finite_difference_eps
