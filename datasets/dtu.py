@@ -4,7 +4,7 @@ import math
 import numpy as np
 from PIL import Image
 import cv2
-
+from sklearn.cluster import KMeans
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, IterableDataset
@@ -132,7 +132,51 @@ class DTUDatasetBase():
             self.all_images.append(img)
             self.pred_depths.append(depth)
 
+        self.all_c2w_all = torch.stack(self.all_c2w, dim=0)
+        self.all_images_all = torch.stack(self.all_images, dim=0)
+        self.all_fg_masks_all = torch.stack(self.all_fg_masks, dim=0)  
+        self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
+        self.directions_all = torch.stack(self.directions, dim=0)
+
         initial_view = self.config.get('initial_view', None)
+
+        if initial_view == "farthest":
+            camera_pos = self.all_c2w_all[:, :, 3]
+            farthest_dist = 0.
+            img_pair = None
+            for i in range(camera_pos.shape[0]):
+                for j in range(i+1, camera_pos.shape[0]):
+                    dist = torch.sum((camera_pos[i] - camera_pos[j]) ** 2)
+                    if dist > farthest_dist:
+                        farthest_dist = dist
+                        img_pair = [i, j]
+            
+            farthest_dist = 0.
+            for i in range(camera_pos.shape[0]):
+                if i in img_pair:
+                    continue
+                dist = torch.sqrt(torch.sum((camera_pos[i] - camera_pos[img_pair[0]]) ** 2)) + \
+                       torch.sqrt(torch.sum((camera_pos[i] - camera_pos[img_pair[1]]) ** 2))
+                if dist > farthest_dist:
+                    farthest_dist = dist
+                    initial_view = [img_pair[0], img_pair[1], i]
+                    
+            initial_view = sorted(initial_view)
+        
+        if initial_view == "cluster":
+            n = self.config.get('n_view', 3)
+            camera_pos = self.all_c2w_all[:, :, 3]
+            kmeans = KMeans(n_clusters=n, n_init="auto").fit(camera_pos)
+
+            center = kmeans.cluster_centers_
+            initial_view = []
+
+            for i in range(n):
+                idx = torch.argmin(torch.sum((camera_pos - center[i]) ** 2, dim=-1))
+                initial_view.append(idx.item())
+            
+            initial_view = sorted(initial_view)
+
         if initial_view:
             self.initial_view = copy.deepcopy(initial_view)
             for elem in self.initial_view:
@@ -140,11 +184,7 @@ class DTUDatasetBase():
         else:
             self.initial_view = None
 
-        self.all_c2w_all = torch.stack(self.all_c2w, dim=0)
-        self.all_images_all = torch.stack(self.all_images, dim=0)
-        self.all_fg_masks_all = torch.stack(self.all_fg_masks, dim=0)  
-        self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
-        self.directions_all = torch.stack(self.directions, dim=0)
+        print(self.split, self.initial_view)
 
         # only train with limited views
         if self.split == 'train':

@@ -122,7 +122,7 @@ class NeuSSystem(BaseSystem):
         depth_render[depth_mask] = 1. / depth_render[depth_mask]
         loss_depth = ScaleAndShiftInvariantLoss()(depth_render, depth_pred, depth_mask)
         self.log('train/loss_depth', loss_depth)
-        loss += loss_depth * self.C(self.config.get('system').get('loss').get('lambda_depth', 0))
+        loss += loss_depth * self.C2(self.config.system.loss.get('lambda_depth', 0))
 
         opacity = torch.clamp(out['opacity'].squeeze(-1), 1.e-3, 1.-1.e-3)
         loss_mask = binary_cross_entropy(opacity, batch['fg_mask'].float())

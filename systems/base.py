@@ -19,21 +19,26 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         self.prepare()
         self.model = models.make(self.config.model.name, self.config.model)
         initial_view = self.config.dataset.get('initial_view', None)
-        if initial_view:
-            self.initial_view = copy.deepcopy(initial_view)
-        else:
-            self.initial_view = None
-        self.n_images = len(os.listdir(os.path.join(self.config.dataset.root_dir, 'image')))
-        self.candidate_views = [i for i in range(self.n_images)]
-        if self.initial_view:
-            for elem in self.initial_view:
-                self.candidate_views.remove(elem)
+        self.use_initial_view = True if initial_view else False
+        self.initial_view, self.candidate_views = None, None
     
     def prepare(self):
         pass
 
     def forward(self, batch):
         raise NotImplementedError
+    
+    def C2(self, value):
+        if isinstance(value, int) or isinstance(value, float):
+            pass
+        else:
+            # list: [init_value, end_value, stop_step]
+            init_value, end_value, stop_step = value
+            if self.global_step > stop_step:
+                value = end_value
+            else:
+                value = init_value
+        return value
     
     def C(self, value):
         if isinstance(value, int) or isinstance(value, float):
@@ -63,6 +68,9 @@ class BaseSystem(pl.LightningModule, SaverMixin):
     """
     def on_train_batch_start(self, batch, batch_idx, unused=0):
         self.dataset = self.trainer.datamodule.train_dataloader().dataset
+        if self.use_initial_view and (self.initial_view is None):
+            self.initial_view = copy.deepcopy(self.dataset.initial_view)
+            self.candidate_views = copy.deepcopy(self.dataset.candidate_views)
         self.dataset.update(self.initial_view, self.candidate_views)
         self.preprocess_data(batch, 'train')
         update_module_step(self.model, self.current_epoch, self.global_step)
