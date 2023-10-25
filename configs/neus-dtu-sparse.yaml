@@ -99,7 +99,7 @@ system:
         lr: 0.01
       variance:
         lr: 0.001
-  constant_steps: 1000
+  constant_steps: 2000
   scheduler:
     name: SequentialLR
     interval: step

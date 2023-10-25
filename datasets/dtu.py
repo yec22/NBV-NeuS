@@ -124,9 +124,12 @@ class DTUDatasetBase():
             mask = TF.to_tensor(mask)[0]
 
             pred_depth_path = os.path.join(depth_dir, f'{i:06d}.png')
-            depth = Image.open(pred_depth_path).convert('L') # (H, W, 1)
-            depth = depth.resize(self.img_wh, Image.BICUBIC)
-            depth = TF.to_tensor(depth)[0]
+            if os.path.exists(pred_depth_path):
+                depth = Image.open(pred_depth_path).convert('L') # (H, W, 1)
+                depth = depth.resize(self.img_wh, Image.BICUBIC)
+                depth = TF.to_tensor(depth)[0]
+            else:
+                depth = torch.zeros((self.img_wh[1], self.img_wh[0]), dtype=torch.float32)
 
             self.all_fg_masks.append(mask) # (h, w)
             self.all_images.append(img)
