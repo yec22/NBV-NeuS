@@ -21,9 +21,6 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         initial_view = self.config.dataset.get('initial_view', None)
         self.use_initial_view = True if initial_view else False
         self.initial_view, self.candidate_views = None, None
-        self.val_change_step = self.config.get('val_change_step', None)
-        self.new_val_interval = self.config.get('new_val_interval', None)
-        self.has_change = False
     
     def prepare(self):
         pass
@@ -79,11 +76,6 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         update_module_step(self.model, self.current_epoch, self.global_step)
     
     def on_validation_batch_start(self, batch, batch_idx, dataloader_idx):
-        if self.val_change_step and not self.has_change:
-            if self.global_step >= self.val_change_step:
-                self.has_change = True
-                self.trainer.val_check_interval = self.new_val_interval
-                self.trainer.val_check_batch = self.new_val_interval
         self.dataset = self.trainer.datamodule.val_dataloader().dataset
         self.preprocess_data(batch, 'validation')
         update_module_step(self.model, self.current_epoch, self.global_step)

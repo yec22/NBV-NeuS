@@ -169,7 +169,7 @@ class DTUDatasetBase():
         if initial_view == "cluster":
             n = self.config.get('n_view', 3)
             camera_pos = self.all_c2w_all[:, :, 3]
-            kmeans = KMeans(n_clusters=n, n_init="auto").fit(camera_pos)
+            kmeans = KMeans(n_clusters=n, random_state=0, n_init="auto").fit(camera_pos)
 
             center = kmeans.cluster_centers_
             initial_view = []
