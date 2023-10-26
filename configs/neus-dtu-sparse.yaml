@@ -5,12 +5,12 @@ seed: 42
 dataset:
   name: dtu
   scene: ???
-  root_dir: ./load/DTU/${dataset.scene}
+  root_dir: ./load/DTU/dtu_scan${dataset.scene}
   cameras_file: cameras_sphere.npz
   img_downscale: 2 # specify training image size by either img_wh or img_downscale
   apply_mask: true
   initial_view: cluster
-  n_view: 4
+  n_view: 3
 
 model:
   name: neus
@@ -24,7 +24,7 @@ model:
   batch_image_sampling: true
   randomized: true
   ray_chunk: 4096
-  cos_anneal_end: 2000
+  cos_anneal_end: 12000
   learned_background: false
   background_color: white
   variance:
@@ -48,7 +48,7 @@ model:
       base_resolution: 32
       per_level_scale: 1.3195079107728942
       include_xyz: true
-      T: 2000
+      T: 12000
     mlp_network_config:
       otype: VanillaMLP
       activation: ReLU
@@ -84,7 +84,7 @@ system:
     lambda_distortion: 0.0
     lambda_distortion_bg: 0.0
     lambda_opaque: 0.0
-    lambda_depth: [0.1, 0, 2000]
+    lambda_depth: 0.0
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -123,7 +123,7 @@ export:
   export_vertex_color: True
 
 trainer:
-  max_steps: 14000
+  max_steps: 12000
   log_every_n_steps: 100
   num_sanity_val_steps: 0
   val_check_interval: 2000

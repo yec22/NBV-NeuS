@@ -167,17 +167,39 @@ class DTUDatasetBase():
             initial_view = sorted(initial_view)
         
         if initial_view == "cluster":
-            n = self.config.get('n_view', 3)
-            camera_pos = self.all_c2w_all[:, :, 3]
-            kmeans = KMeans(n_clusters=n, random_state=0, n_init="auto").fit(camera_pos)
+            n = self.config.get('n_view', 4)
+            scene_id = self.config.get('scene')
 
-            center = kmeans.cluster_centers_
-            initial_view = []
+            if scene_id > 80:
+                camera_pos_front = self.all_c2w_all[:49, :, 3]
+                camera_pos_back = self.all_c2w_all[49:, :, 3]
 
-            for i in range(n):
-                idx = torch.argmin(torch.sum((camera_pos - center[i]) ** 2, dim=-1))
-                initial_view.append(idx.item())
+                kmeans_front = KMeans(n_clusters=n//2, random_state=0, n_init="auto").fit(camera_pos_front)
+                kmeans_back = KMeans(n_clusters=n-n//2, random_state=0, n_init="auto").fit(camera_pos_back)
+
+                center_front = kmeans_front.cluster_centers_
+                center_back = kmeans_back.cluster_centers_
+
+                initial_view = []
+
+                for i in range(n//2):
+                    idx = torch.argmin(torch.sum((camera_pos_front - center_front[i]) ** 2, dim=-1))
+                    initial_view.append(idx.item())
+                
+                for i in range(n-n//2):
+                    idx = torch.argmin(torch.sum((camera_pos_back - center_back[i]) ** 2, dim=-1))
+                    initial_view.append(49+idx.item())
             
+            else:
+                camera_pos = self.all_c2w_all[:, :, 3]
+                kmeans = KMeans(n_clusters=n, random_state=0, n_init="auto").fit(camera_pos)
+                center = kmeans.cluster_centers_
+                initial_view = []
+
+                for i in range(n):
+                    idx = torch.argmin(torch.sum((camera_pos - center[i]) ** 2, dim=-1))
+                    initial_view.append(idx.item())
+
             initial_view = sorted(initial_view)
 
         if initial_view:
