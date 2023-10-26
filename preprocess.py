@@ -165,12 +165,12 @@ if __name__ == '__main__':
     import glob
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', default=None, type=str, nargs='*', help="path to image (png, jpeg, etc.)")
-    parser.add_argument('--folder', default=None, type=str, help="path to a folder of image (png, jpeg, etc.)")
+    parser.add_argument('--folder', default="load/DTU/dtu_scan122/rgba", type=str, help="path to a folder of image (png, jpeg, etc.)")
     parser.add_argument('--imagepattern', default="*.png", type=str, help="image name pattern")
     parser.add_argument('--exclude', default='', type=str, nargs='*', help="path to image (png, jpeg, etc.) to exclude")
     opt = parser.parse_args()
 
-    # gen_dtu_rgba(path="load/DTU/dtu_scan105")
+    gen_dtu_rgba(path="load/DTU/dtu_scan122")
 
     depth_estimator = DepthEstimator()
     
