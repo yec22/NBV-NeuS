@@ -21,6 +21,7 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         initial_view = self.config.dataset.get('initial_view', None)
         self.use_initial_view = True if initial_view else False
         self.initial_view, self.candidate_views = None, None
+        self.opacity_uncertainty = []
     
     def prepare(self):
         pass

@@ -231,6 +231,14 @@ class NeuSModel(BaseModel):
         else:
             sdf, sdf_grad, feature = self.geometry(positions, with_grad=True, with_feature=True)
         normal = F.normalize(sdf_grad, p=2, dim=-1)
+
+        pts_moved = positions + normal * sdf.unsqueeze(-1)
+        sdf_moved, gradient_moved = self.geometry(pts_moved, with_grad=True, with_feature=False)
+        gradient_moved_norm = F.normalize(gradient_moved, p=2, dim=-1)
+        consis_constraint = 1 - F.cosine_similarity(gradient_moved_norm, normal, dim=-1)
+        weight_moved = torch.exp(-10 * torch.abs(sdf))
+        consis_constraint = consis_constraint * weight_moved
+
         alpha = self.get_alpha(sdf, normal, t_dirs, dists)[...,None]
         rgb = self.texture(feature, t_dirs, normal)
 
@@ -254,6 +262,7 @@ class NeuSModel(BaseModel):
 
         if self.training:
             out.update({
+                'consis_constraint': consis_constraint,
                 'sdf_samples': sdf,
                 'sdf_grad_samples': sdf_grad,
                 'weights': weights.view(-1),

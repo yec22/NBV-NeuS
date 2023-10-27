@@ -115,14 +115,19 @@ class NeuSSystem(BaseSystem):
         self.log('train/loss_eikonal', loss_eikonal)
         loss += loss_eikonal * self.C(self.config.system.loss.lambda_eikonal)
 
-        depth_render = out['depth'][:reshape_batch_size,...].squeeze().reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
-        depth_pred = batch['pred_depth'][:reshape_batch_size,...].reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
-        depth_mask = (batch['fg_mask'] > 0.5) & (out['depth'].squeeze() > 1e-3)
-        depth_mask = depth_mask[:reshape_batch_size,...].reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
-        depth_render[depth_mask] = 1. / depth_render[depth_mask]
-        loss_depth = ScaleAndShiftInvariantLoss()(depth_render, depth_pred, depth_mask)
-        self.log('train/loss_depth', loss_depth)
-        loss += loss_depth * self.C2(self.config.system.loss.get('lambda_depth', 0))
+        if self.C2(self.config.system.loss.get('lambda_depth', 0)) > 0:
+            depth_render = out['depth'][:reshape_batch_size,...].squeeze().reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
+            depth_pred = batch['pred_depth'][:reshape_batch_size,...].reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
+            depth_mask = (batch['fg_mask'] > 0.5) & (out['depth'].squeeze() > 1e-3)
+            depth_mask = depth_mask[:reshape_batch_size,...].reshape(int(sqrt(reshape_batch_size)), int(sqrt(reshape_batch_size)), 1).permute(2, 0, 1)
+            depth_render[depth_mask] = 1. / depth_render[depth_mask]
+            loss_depth = ScaleAndShiftInvariantLoss()(depth_render, depth_pred, depth_mask)
+            self.log('train/loss_depth', loss_depth)
+            loss += loss_depth * self.C2(self.config.system.loss.get('lambda_depth', 0))
+        
+        if self.C(self.config.system.loss.get('lambda_consis', 0)) > 0:
+            loss_consis = torch.mean(out['consis_constraint'])
+            loss += loss_consis * self.C(self.config.system.loss.get('lambda_consis', 0))
 
         opacity = torch.clamp(out['opacity'].squeeze(-1), 1.e-3, 1.-1.e-3)
         loss_mask = binary_cross_entropy(opacity, batch['fg_mask'].float())
@@ -188,6 +193,10 @@ class NeuSSystem(BaseSystem):
     def validation_step(self, batch, batch_idx):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
+        uncertainty = torch.sum(torch.abs(out['opacity'][out['opacity'] < 0.5] - 0)) +\
+                      torch.sum(torch.abs(out['opacity'][out['opacity'] >= 0.5] - 1))
+        self.opacity_uncertainty.append(uncertainty)
+        
         W, H = self.dataset.img_wh
         self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
@@ -228,11 +237,20 @@ class NeuSSystem(BaseSystem):
             self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True, sync_dist=True)
         
         if self.initial_view:
+            ### IDLE: random sample from all candidate views
             select_view = random.sample(self.candidate_views, 1)[0]
+
+            ### Option 1: maximize opacity uncertainty
+            # self.opacity_uncertainty = self.opacity_uncertainty[:len(self.candidate_views)]
+            # max_uncertainty = max(self.opacity_uncertainty)
+            # select_view = self.candidate_views[self.opacity_uncertainty.index(max_uncertainty)]
+            
+            # update
             self.candidate_views.remove(select_view)
             self.initial_view.append(select_view)
             self.dataset.update(self.initial_view, self.candidate_views)
-
+            # clear cache
+            self.opacity_uncertainty = []
             print(self.initial_view)
             
 
