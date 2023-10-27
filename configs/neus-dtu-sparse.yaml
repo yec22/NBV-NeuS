@@ -85,7 +85,7 @@ system:
     lambda_distortion_bg: 0.0
     lambda_opaque: 0.0
     lambda_depth: 0.0
-    lambda_consis: [0.05, 0.005, 10000]
+    lambda_consis: [0.05, 0.01, 10000]
     sparsity_scale: 1.
   optimizer:
     name: AdamW

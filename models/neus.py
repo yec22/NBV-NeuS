@@ -246,12 +246,13 @@ class NeuSModel(BaseModel):
         opacity = accumulate_along_rays(weights, ray_indices, values=None, n_rays=n_rays)
         depth = accumulate_along_rays(weights, ray_indices, values=midpoints, n_rays=n_rays)
         comp_rgb = accumulate_along_rays(weights, ray_indices, values=rgb, n_rays=n_rays)
-
         comp_normal = accumulate_along_rays(weights, ray_indices, values=normal, n_rays=n_rays)
-        # do not normalize to avoid floating artifacts
-        # comp_normal = F.normalize(comp_normal, p=2, dim=-1)
+
+        eikonal = (torch.linalg.norm(sdf_grad, ord=2, dim=-1) - 1.) ** 2
+        eik_unc = accumulate_along_rays(weights, ray_indices, values=eikonal.unsqueeze(-1), n_rays=n_rays)
 
         out = {
+            'eik_unc': eik_unc,
             'comp_rgb': comp_rgb,
             'comp_normal': comp_normal,
             'opacity': opacity,

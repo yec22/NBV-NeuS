@@ -193,10 +193,14 @@ class NeuSSystem(BaseSystem):
     def validation_step(self, batch, batch_idx):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
-        uncertainty = torch.sum(torch.abs(out['opacity'][out['opacity'] < 0.5] - 0)) +\
-                      torch.sum(torch.abs(out['opacity'][out['opacity'] >= 0.5] - 1))
-        self.opacity_uncertainty.append(uncertainty)
         
+        opa_unc = torch.sum(torch.abs(out['opacity'][out['opacity'] < 0.5] - 0)) +\
+                      torch.sum(torch.abs(out['opacity'][out['opacity'] >= 0.5] - 1))
+        self.opacity_uncertainty.append(opa_unc)
+
+        eik_unc = torch.sum(out['eik_unc'][out['rays_valid_full'][...,0]]) / torch.sum(out['rays_valid_full'][...,0])
+        self.eikonal_uncertainty.append(eik_unc)
+
         W, H = self.dataset.img_wh
         self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
@@ -205,7 +209,7 @@ class NeuSSystem(BaseSystem):
             {'type': 'rgb', 'img': out['comp_rgb_bg'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': out['comp_rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
         ] if self.config.model.learned_background else []) + [
-            {'type': 'grayscale', 'img': out['opacity'].view(H, W), 'kwargs': {'cmap': 'jet', 'data_range': (0, 1)}},
+            {'type': 'grayscale', 'img': out['eik_unc'].view(H, W), 'kwargs': {'cmap': 'jet'}},
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {'cmap': 'jet'}},
             {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
         ])
@@ -238,19 +242,25 @@ class NeuSSystem(BaseSystem):
         
         if self.initial_view:
             ### IDLE: random sample from all candidate views
-            select_view = random.sample(self.candidate_views, 1)[0]
+            # select_view = random.sample(self.candidate_views, 1)[0]
 
             ### Option 1: maximize opacity uncertainty
             # self.opacity_uncertainty = self.opacity_uncertainty[:len(self.candidate_views)]
             # max_uncertainty = max(self.opacity_uncertainty)
             # select_view = self.candidate_views[self.opacity_uncertainty.index(max_uncertainty)]
             
+            ### Option 2: maximize eikonal uncertainty
+            self.eikonal_uncertainty = self.eikonal_uncertainty[:len(self.candidate_views)]
+            max_uncertainty = max(self.eikonal_uncertainty)
+            select_view = self.candidate_views[self.eikonal_uncertainty.index(max_uncertainty)]
+
             # update
             self.candidate_views.remove(select_view)
             self.initial_view.append(select_view)
             self.dataset.update(self.initial_view, self.candidate_views)
             # clear cache
             self.opacity_uncertainty = []
+            self.eikonal_uncertainty = []
             print(self.initial_view)
             
 
