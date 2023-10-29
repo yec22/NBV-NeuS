@@ -13,6 +13,7 @@ from systems.base import BaseSystem
 from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvariantLoss
 import cv2, random
 from math import sqrt
+from utils.misc import config_to_primitive
 
 @systems.register('neus-system')
 class NeuSSystem(BaseSystem):
@@ -125,9 +126,16 @@ class NeuSSystem(BaseSystem):
             self.log('train/loss_depth', loss_depth)
             loss += loss_depth * self.C2(self.config.system.loss.get('lambda_depth', 0))
         
-        if self.C(self.config.system.loss.get('lambda_consis', 0)) > 0:
+        lbd = self.config.system.loss.get('lambda_consis', 0)
+        if isinstance(lbd, int) or isinstance(lbd, float):
+            pass
+        else:
+            lbd = config_to_primitive(lbd)
+        if isinstance(lbd, list) and len(lbd) == 2:
+            lbd = lbd + [self.config.trainer.max_steps]
+        if self.C(lbd) > 0:
             loss_consis = torch.mean(out['consis_constraint'])
-            loss += loss_consis * self.C(self.config.system.loss.get('lambda_consis', 0))
+            loss += loss_consis * self.C(lbd)
 
         opacity = torch.clamp(out['opacity'].squeeze(-1), 1.e-3, 1.-1.e-3)
         loss_mask = binary_cross_entropy(opacity, batch['fg_mask'].float())
@@ -167,11 +175,6 @@ class NeuSSystem(BaseSystem):
             loss += loss_
         
         self.log('train/inv_s', out['inv_s'], prog_bar=True)
-
-        for name, value in self.config.system.loss.items():
-            if name.startswith('lambda'):
-                self.log(f'train_params/{name}', self.C(value))
-
         self.log('train/num_rays', float(self.train_num_rays), prog_bar=True)
 
         return {
@@ -240,29 +243,34 @@ class NeuSSystem(BaseSystem):
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
             self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True, sync_dist=True)
         
-        if self.initial_view:
-            ### IDLE: random sample from all candidate views
-            # select_view = random.sample(self.candidate_views, 1)[0]
+        if self.global_step < self.config.trainer.max_steps:
+            if self.initial_view:
+                ### IDLE: random sample from all candidate views
+                # select_view = random.sample(self.candidate_views, 1)[0]
 
-            ### Option 1: maximize opacity uncertainty
-            # self.opacity_uncertainty = self.opacity_uncertainty[:len(self.candidate_views)]
-            # max_uncertainty = max(self.opacity_uncertainty)
-            # select_view = self.candidate_views[self.opacity_uncertainty.index(max_uncertainty)]
-            
-            ### Option 2: maximize eikonal uncertainty
-            self.eikonal_uncertainty = self.eikonal_uncertainty[:len(self.candidate_views)]
-            max_uncertainty = max(self.eikonal_uncertainty)
-            select_view = self.candidate_views[self.eikonal_uncertainty.index(max_uncertainty)]
+                ### Option 1: maximize opacity uncertainty
+                # self.opacity_uncertainty = self.opacity_uncertainty[:len(self.candidate_views)]
+                # max_uncertainty = max(self.opacity_uncertainty)
+                # select_view = self.candidate_views[self.opacity_uncertainty.index(max_uncertainty)]
+                
+                ### Option 2: maximize eikonal uncertainty
+                self.eikonal_uncertainty = self.eikonal_uncertainty[:len(self.candidate_views)]
+                max_uncertainty = max(self.eikonal_uncertainty)
+                select_view = self.candidate_views[self.eikonal_uncertainty.index(max_uncertainty)]
 
-            # update
-            self.candidate_views.remove(select_view)
-            self.initial_view.append(select_view)
-            self.dataset.update(self.initial_view, self.candidate_views)
-            # clear cache
-            self.opacity_uncertainty = []
-            self.eikonal_uncertainty = []
-            print(self.initial_view)
-            
+                # update
+                self.candidate_views.remove(select_view)
+                self.initial_view.append(select_view)
+                self.dataset.update(self.initial_view, self.candidate_views)
+                # clear cache
+                self.opacity_uncertainty = []
+                self.eikonal_uncertainty = []
+                print(self.initial_view)
+        else:
+            if self.initial_view:
+                with open(self.get_save_path("select_views.txt"), "w") as f:
+                    f.write(str(self.initial_view))
+
 
     def test_step(self, batch, batch_idx):
         out = self(batch)

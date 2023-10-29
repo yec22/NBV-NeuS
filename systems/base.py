@@ -46,7 +46,10 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         if isinstance(value, int) or isinstance(value, float):
             pass
         else:
-            value = config_to_primitive(value)
+            if isinstance(value, list):
+                pass
+            else:
+                value = config_to_primitive(value)
             if not isinstance(value, list):
                 raise TypeError('Scalar specification only supports list, got', type(value))
             if len(value) == 3:

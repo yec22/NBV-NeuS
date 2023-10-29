@@ -1,6 +1,7 @@
 name: neus-dtu-${basename:${dataset.root_dir}}-sparse
 tag: ""
 seed: 42
+total_views: 8
 
 dataset:
   name: dtu
@@ -11,6 +12,14 @@ dataset:
   apply_mask: true
   initial_view: cluster
   n_view: 3
+
+trainer:
+  max_steps: ${mul:${sub:${total_views}, 2}, 2000}
+  log_every_n_steps: 100
+  num_sanity_val_steps: 0
+  val_check_interval: 2000
+  enable_progress_bar: true
+  precision: 16
 
 model:
   name: neus
@@ -24,7 +33,7 @@ model:
   batch_image_sampling: true
   randomized: true
   ray_chunk: 4096
-  cos_anneal_end: 12000
+  cos_anneal_end: ${trainer.max_steps}
   learned_background: false
   background_color: white
   variance:
@@ -48,7 +57,7 @@ model:
       base_resolution: 32
       per_level_scale: 1.3195079107728942
       include_xyz: true
-      T: 12000
+      T: ${max:${trainer.max_steps}, 12000}
     mlp_network_config:
       otype: VanillaMLP
       activation: ReLU
@@ -60,7 +69,7 @@ model:
       weight_norm: true
   texture:
     name: volume-radiance
-    input_feature_dim: ${add:${model.geometry.feature_dim},3} # surface normal as additional input
+    input_feature_dim: ${add:${model.geometry.feature_dim}, 3} # surface normal
     dir_encoding_config:
       otype: SphericalHarmonics
       degree: 3
@@ -85,7 +94,7 @@ system:
     lambda_distortion_bg: 0.0
     lambda_opaque: 0.0
     lambda_depth: 0.0
-    lambda_consis: [0.05, 0.01, 10000]
+    lambda_consis: [0.05, 0.01]
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -100,7 +109,7 @@ system:
         lr: 0.01
       variance:
         lr: 0.001
-  constant_steps: 2000
+  constant_steps: ${idiv:${trainer.max_steps}, 6}
   scheduler:
     name: SequentialLR
     interval: step
@@ -122,11 +131,3 @@ checkpoint:
 export:
   chunk_size: 2097152
   export_vertex_color: True
-
-trainer:
-  max_steps: 12000
-  log_every_n_steps: 100
-  num_sanity_val_steps: 0
-  val_check_interval: 2000
-  enable_progress_bar: true
-  precision: 16

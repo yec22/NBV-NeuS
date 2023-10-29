@@ -10,6 +10,8 @@ OmegaConf.register_new_resolver('sub', lambda a, b: a - b)
 OmegaConf.register_new_resolver('mul', lambda a, b: a * b)
 OmegaConf.register_new_resolver('div', lambda a, b: a / b)
 OmegaConf.register_new_resolver('idiv', lambda a, b: a // b)
+OmegaConf.register_new_resolver('min', lambda a, b: a if a < b else b)
+OmegaConf.register_new_resolver('max', lambda a, b: a if a > b else b)
 OmegaConf.register_new_resolver('basename', lambda p: os.path.basename(p))
 # ======================================================= #
 
