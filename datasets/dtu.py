@@ -167,7 +167,7 @@ class DTUDatasetBase():
             initial_view = sorted(initial_view)
         
         if initial_view == "cluster":
-            n = self.config.get('n_view', 4)
+            n = self.config.get('n_view', 3)
             scene_id = self.config.get('scene')
 
             if scene_id > 80:

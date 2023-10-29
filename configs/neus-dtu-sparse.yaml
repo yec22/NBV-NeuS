@@ -14,7 +14,7 @@ dataset:
   n_view: 3
 
 trainer:
-  max_steps: ${mul:${sub:${total_views}, 2}, 2000}
+  max_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}
   log_every_n_steps: 100
   num_sanity_val_steps: 0
   val_check_interval: 2000

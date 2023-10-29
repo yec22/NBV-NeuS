@@ -3,13 +3,12 @@ import json
 import math
 import numpy as np
 from PIL import Image
-
+from sklearn.cluster import KMeans
 import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import torchvision.transforms.functional as TF
-
+import copy
 import pytorch_lightning as pl
-
 import datasets
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
@@ -24,7 +23,11 @@ class BlenderDatasetBase():
         self.has_mask = True
         self.apply_mask = True
 
-        with open(os.path.join(self.config.root_dir, f"transforms_{self.split}.json"), 'r') as f:
+        if self.split == 'val':
+            rewrite_split = 'train'
+        else:
+            rewrite_split = self.split
+        with open(os.path.join(self.config.root_dir, f"transforms_{rewrite_split}.json"), 'r') as f:
             meta = json.load(f)
 
         if 'w' in meta and 'h' in meta:
@@ -40,6 +43,9 @@ class BlenderDatasetBase():
         else:
             raise KeyError("Either img_wh or img_downscale should be specified.")
         
+        if split == 'val':
+            w, h = w//4, h//4
+
         self.w, self.h = w, h
         self.img_wh = (self.w, self.h)
 
@@ -52,6 +58,10 @@ class BlenderDatasetBase():
             get_ray_directions(self.w, self.h, self.focal, self.focal, self.w//2, self.h//2).to(self.rank) # (h, w, 3)           
 
         self.all_c2w, self.all_images, self.all_fg_masks = [], [], []
+        self.pred_depths = []
+
+        n_images = len(meta['frames'])
+        self.candidate_views = [i for i in range(n_images)]
 
         for i, frame in enumerate(meta['frames']):
             c2w = torch.from_numpy(np.array(frame['transform_matrix'])[:3, :4])
@@ -62,25 +72,141 @@ class BlenderDatasetBase():
             img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0) # (4, h, w) => (h, w, 4)
 
+            depth = torch.zeros((self.img_wh[1], self.img_wh[0]), dtype=torch.float32)
+
             self.all_fg_masks.append(img[..., -1]) # (h, w) -> alpha
             self.all_images.append(img[...,:3]) # (h, w, 3) -> RGB
+            self.pred_depths.append(depth)
 
-        self.all_c2w, self.all_images, self.all_fg_masks = \
+
+        self.all_c2w_all, self.all_images_all, self.all_fg_masks_all = \
             torch.stack(self.all_c2w, dim=0), \
             torch.stack(self.all_images, dim=0), \
             torch.stack(self.all_fg_masks, dim=0)
+        self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
 
-        self.initial_view = self.config.get('initial_view', None)
+        initial_view = self.config.get('initial_view', None)
+
+        if initial_view == "farthest":
+            camera_pos = self.all_c2w_all[:, :, 3]
+            farthest_dist = 0.
+            img_pair = None
+            for i in range(camera_pos.shape[0]):
+                for j in range(i+1, camera_pos.shape[0]):
+                    dist = torch.sum((camera_pos[i] - camera_pos[j]) ** 2)
+                    if dist > farthest_dist:
+                        farthest_dist = dist
+                        img_pair = [i, j]
+            
+            farthest_dist = 0.
+            for i in range(camera_pos.shape[0]):
+                if i in img_pair:
+                    continue
+                dist = torch.sqrt(torch.sum((camera_pos[i] - camera_pos[img_pair[0]]) ** 2)) + \
+                       torch.sqrt(torch.sum((camera_pos[i] - camera_pos[img_pair[1]]) ** 2))
+                if dist > farthest_dist:
+                    farthest_dist = dist
+                    initial_view = [img_pair[0], img_pair[1], i]
+                    
+            initial_view = sorted(initial_view)
+        
+        if initial_view == "cluster":
+            n = self.config.get('n_view', 4)
+
+            camera_pos = self.all_c2w_all[:, :, 3]
+            kmeans = KMeans(n_clusters=n, random_state=0, n_init="auto").fit(camera_pos)
+            center = kmeans.cluster_centers_
+            initial_view = []
+
+            for i in range(n):
+                idx = torch.argmin(torch.sum((camera_pos - center[i]) ** 2, dim=-1))
+                initial_view.append(idx.item())
+
+            initial_view = sorted(initial_view)
+
+        if initial_view:
+            self.initial_view = copy.deepcopy(initial_view)
+            for elem in self.initial_view:
+                self.candidate_views.remove(elem)
+        else:
+            self.initial_view = None
+
+        print(self.split, self.initial_view)
+
         # only train with limited views
-        if self.initial_view and self.split == 'train':
-            self.all_c2w = self.all_c2w[self.initial_view,...]
-            self.all_images = self.all_images[self.initial_view,...]
-            self.all_fg_masks = self.all_fg_masks[self.initial_view,...]
+        if self.split == 'train':
+            if self.initial_view:
+                self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
+                self.all_images_train = self.all_images_all[self.initial_view,...]
+                self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
+            else:
+                self.all_c2w_train = self.all_c2w_all
+                self.all_images_train = self.all_images_all
+                self.pred_depths_train = self.pred_depths_all
+                self.all_fg_masks_train = self.all_fg_masks_all
+            self.directions_train = self.directions
+        
+        # only validate with candidate views
+        elif self.split == 'val':
+            self.all_c2w = self.all_c2w_all[self.candidate_views,...]
+            self.all_images = self.all_images_all[self.candidate_views,...]
+            self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+            self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
+        
+        else: # test
+            self.all_c2w = self.all_c2w_all
+            self.all_images = self.all_images_all
+            self.pred_depths = self.pred_depths_all
+            self.all_fg_masks = self.all_fg_masks_all
 
-        self.all_c2w, self.all_images, self.all_fg_masks = \
-            self.all_c2w.float().to(self.rank), \
-            self.all_images.float().to(self.rank), \
-            self.all_fg_masks.float().to(self.rank)
+        if self.split == 'train':
+            self.directions_train = self.directions_train.float().to(self.rank)
+            self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+            self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
+                self.all_c2w_train.float().to(self.rank), \
+                self.all_images_train.float().to(self.rank), \
+                self.all_fg_masks_train.float().to(self.rank)
+        else: # test / val
+            self.directions = self.directions.float().to(self.rank)
+            self.pred_depths = self.pred_depths.float().to(self.rank)
+            self.all_c2w, self.all_images, self.all_fg_masks = \
+                self.all_c2w.float().to(self.rank), \
+                self.all_images.float().to(self.rank), \
+                self.all_fg_masks.float().to(self.rank)
+    
+    def update(self, initial_view, candidate_views):
+        if self.initial_view and (self.initial_view != initial_view):
+            self.initial_view = copy.deepcopy(initial_view)
+            self.candidate_views = copy.deepcopy(candidate_views)
+
+            if self.split == 'train':
+                self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
+                self.all_images_train = self.all_images_all[self.initial_view,...]
+                self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
+            
+            if self.split == 'val':
+                self.all_c2w = self.all_c2w_all[self.candidate_views,...]
+                self.all_images = self.all_images_all[self.candidate_views,...]
+                self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+                self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
+            
+            if self.split == 'train':
+                self.directions_train = self.directions_train.float().to(self.rank)
+                self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+                self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
+                    self.all_c2w_train.float().to(self.rank), \
+                    self.all_images_train.float().to(self.rank), \
+                    self.all_fg_masks_train.float().to(self.rank)
+            
+            if self.split == 'val':
+                self.directions = self.directions.float().to(self.rank)
+                self.pred_depths = self.pred_depths.float().to(self.rank)
+                self.all_c2w, self.all_images, self.all_fg_masks = \
+                    self.all_c2w.float().to(self.rank), \
+                    self.all_images.float().to(self.rank), \
+                    self.all_fg_masks.float().to(self.rank)
         
 
 class BlenderDataset(Dataset, BlenderDatasetBase):
