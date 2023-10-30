@@ -98,6 +98,7 @@ system:
     lambda_distortion: 0.
     lambda_opaque: 0.
     lambda_depth: 0.0
+    lambda_orient: 5.0
     lambda_consis: [0.05, 0.01]
     sparsity_scale: 1.
   optimizer:

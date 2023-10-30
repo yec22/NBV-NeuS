@@ -193,3 +193,25 @@ class ScaleAndShiftInvariantLoss(torch.nn.Module):
         depth_loss = F.l1_loss(depth_error, torch.zeros_like(depth_error), reduction='sum') / (mask.sum() + 1e-5)
 
         return depth_loss
+
+class TVLoss(nn.Module):
+    def __init__(self, mask=None):
+        super(TVLoss,self).__init__()
+        self.TVLoss_mask = mask
+
+    def forward(self,x):
+        # x: [C, H, W]
+        # mask: [H, W]
+        h_x = x.size()[1]
+        w_x = x.size()[2]
+        count_h = self._tensor_size(x[:,1:,:])
+        count_w = self._tensor_size(x[:,:,1:])
+        h_tv = torch.pow((x[:,1:,:]-x[:,:h_x-1,:]),2).sum()
+        w_tv = torch.pow((x[:,:,1:]-x[:,:,:w_x-1]),2).sum()
+        TV_Loss = 2*(h_tv/count_h+w_tv/count_w)
+        if self.TVLoss_mask:
+           TV_Loss = TV_Loss * self.TVLoss_mask
+        return TV_Loss
+
+    def _tensor_size(self,t):
+        return t.size()[0]*t.size()[1]*t.size()[2]

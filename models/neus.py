@@ -251,6 +251,11 @@ class NeuSModel(BaseModel):
         eikonal = (torch.linalg.norm(sdf_grad, ord=2, dim=-1) - 1.) ** 2
         eik_unc = accumulate_along_rays(weights, ray_indices, values=eikonal.unsqueeze(-1), n_rays=n_rays)
 
+        orient = torch.sum(torch.mul(normal, t_dirs), dim=-1) # [N,]
+        orient[orient < 0] = 0
+        orient = orient ** 2
+        loss_orient = accumulate_along_rays(weights, ray_indices, values=orient.unsqueeze(-1), n_rays=n_rays)
+
         out = {
             'eik_unc': eik_unc,
             'comp_rgb': comp_rgb,
@@ -263,6 +268,7 @@ class NeuSModel(BaseModel):
 
         if self.training:
             out.update({
+                'loss_orient': loss_orient,
                 'consis_constraint': consis_constraint,
                 'sdf_samples': sdf,
                 'sdf_grad_samples': sdf_grad,

@@ -5,7 +5,7 @@ seed: 42
 dataset:
   name: dtu
   scene: ???
-  root_dir: ./load/DTU/${dataset.scene}
+  root_dir: ./load/DTU/dtu_scan${dataset.scene}
   cameras_file: cameras_sphere.npz
   img_downscale: 2 # specify training image size by either img_wh or img_downscale
   apply_mask: true

@@ -23,6 +23,7 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         self.initial_view, self.candidate_views = None, None
         self.opacity_uncertainty = []
         self.eikonal_uncertainty = []
+        self.tv_uncertainty = []
     
     def prepare(self):
         pass

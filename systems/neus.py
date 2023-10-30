@@ -10,7 +10,7 @@ from models.utils import cleanup
 from models.ray_utils import get_rays
 import systems
 from systems.base import BaseSystem
-from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvariantLoss
+from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvariantLoss, TVLoss
 import cv2, random
 from math import sqrt
 from utils.misc import config_to_primitive
@@ -136,6 +136,10 @@ class NeuSSystem(BaseSystem):
         if self.C(lbd) > 0:
             loss_consis = torch.mean(out['consis_constraint'])
             loss += loss_consis * self.C(lbd)
+        
+        loss_orient = torch.mean(out['loss_orient'])
+        self.log('train/loss_orient', loss_orient)
+        loss += loss_orient * self.C(self.config.system.loss.get('lambda_orient', 0))
 
         opacity = torch.clamp(out['opacity'].squeeze(-1), 1.e-3, 1.-1.e-3)
         loss_mask = binary_cross_entropy(opacity, batch['fg_mask'].float())
@@ -205,6 +209,9 @@ class NeuSSystem(BaseSystem):
         self.eikonal_uncertainty.append(eik_unc)
 
         W, H = self.dataset.img_wh
+        depth_unc = TVLoss()(out['depth'].view(H, W).unsqueeze(0))
+        self.tv_uncertainty.append(depth_unc)
+
         self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': out['comp_rgb_full'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
@@ -220,7 +227,7 @@ class NeuSSystem(BaseSystem):
             'psnr': psnr,
             'index': batch['index']
         }
-          
+
     
     """
     # aggregate outputs from different devices when using DP
@@ -258,6 +265,11 @@ class NeuSSystem(BaseSystem):
                 max_uncertainty = max(self.eikonal_uncertainty)
                 select_view = self.candidate_views[self.eikonal_uncertainty.index(max_uncertainty)]
 
+                ### Option 3: maximize tv uncertainty
+                # self.tv_uncertainty = self.tv_uncertainty[:len(self.candidate_views)]
+                # max_uncertainty = max(self.tv_uncertainty)
+                # select_view = self.candidate_views[self.tv_uncertainty.index(max_uncertainty)]
+
                 # update
                 self.candidate_views.remove(select_view)
                 self.initial_view.append(select_view)
@@ -265,7 +277,9 @@ class NeuSSystem(BaseSystem):
                 # clear cache
                 self.opacity_uncertainty = []
                 self.eikonal_uncertainty = []
+                self.tv_uncertainty = []
                 print(self.initial_view)
+
         else:
             if self.initial_view:
                 with open(self.get_save_path("select_views.txt"), "w") as f:
