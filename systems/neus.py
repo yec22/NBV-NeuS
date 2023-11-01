@@ -14,6 +14,7 @@ from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvarian
 import cv2, random
 from math import sqrt
 from utils.misc import config_to_primitive
+from utils.warper import warp
 
 @systems.register('neus-system')
 class NeuSSystem(BaseSystem):
@@ -91,6 +92,11 @@ class NeuSSystem(BaseSystem):
             'fg_mask': fg_mask,
             'pred_depth': pred_depth
         })
+
+        if 'index' in batch: # test / validation
+            batch.update({
+                'index': index
+            })
     
     def training_step(self, batch, batch_idx):
         out = self(batch)
@@ -223,11 +229,44 @@ class NeuSSystem(BaseSystem):
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {'cmap': 'jet'}},
             {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
         ])
+
+        if self.candidate_views:
+            index = batch['index'].item()
+            src_view = self.candidate_views[index]
+            src_cam = self.dataset.all_c2w_all[src_view, :, 3].unsqueeze(0)  # [1, 3]
+            collect_cams = self.dataset.all_c2w_all[self.initial_view, :, 3] # [N, 3]
+            cam_dist = torch.sum((collect_cams - src_cam) ** 2, dim=-1)
+            tar_view = self.initial_view[cam_dist.argmin()]
+            
+            frame1 = out['comp_rgb_full'].view(H, W, 3).cpu().numpy()
+            depth1 = out['depth'].view(H, W).cpu().numpy()
+            mask1 = (depth1 > 0.01)
+            if len(self.dataset.intrinsics) > 1:
+                intrinsic1 = self.dataset.intrinsics[src_view].cpu().numpy()
+            else:
+                intrinsic1 = self.dataset.intrinsics[0].cpu().numpy()
+            transform1 = np.eye(4)
+            transform1[:3, :4] = self.dataset.all_c2w_all[src_view].cpu().numpy()
+            transform1[:3, 1:3] *= -1.
+            transform1 = np.linalg.inv(transform1)
+
+            frame2 = self.dataset.all_images_all[tar_view].view(H, W, 3).cpu().numpy()
+            if len(self.dataset.intrinsics) > 1:
+                intrinsic2 = self.dataset.intrinsics[tar_view].cpu().numpy()
+            else:
+                intrinsic2 = self.dataset.intrinsics[0].cpu().numpy()
+            transform2 = np.eye(4)
+            transform2[:3, :4] = self.dataset.all_c2w_all[tar_view].cpu().numpy()
+            transform2[:3, 1:3] *= -1.
+            transform2 = np.linalg.inv(transform2)
+
+            save_name = self.get_warp_path(f"it{self.global_step}-{batch['index'][0].item()}-warp.png")
+            warp(frame1, frame2, depth1, mask1, intrinsic1, intrinsic2, transform1, transform2, save_name)
+
         return {
             'psnr': psnr,
             'index': batch['index']
         }
-
     
     """
     # aggregate outputs from different devices when using DP

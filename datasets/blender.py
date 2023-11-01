@@ -63,6 +63,18 @@ class BlenderDatasetBase():
         n_images = len(meta['frames'])
         self.candidate_views = [i for i in range(n_images)]
 
+        self.intrinsics = []
+        self.intrinsics.append(
+            torch.tensor(
+                [
+                    [self.focal, 0, self.w//2],
+                    [0, self.focal, self.h//2],
+                    [0, 0, 1]
+                ]
+                ,dtype=torch.float32
+            )
+        )
+
         for i, frame in enumerate(meta['frames']):
             c2w = torch.from_numpy(np.array(frame['transform_matrix'])[:3, :4])
             self.all_c2w.append(c2w)
@@ -83,6 +95,7 @@ class BlenderDatasetBase():
             torch.stack(self.all_c2w, dim=0), \
             torch.stack(self.all_images, dim=0), \
             torch.stack(self.all_fg_masks, dim=0)
+        self.intrinsics = torch.stack(self.intrinsics, dim=0)
         self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
 
         initial_view = self.config.get('initial_view', None)

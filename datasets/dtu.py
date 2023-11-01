@@ -90,6 +90,7 @@ class DTUDatasetBase():
         self.directions = []
         self.all_c2w, self.all_images, self.all_fg_masks = [], [], []
         self.pred_depths = []
+        self.intrinsics = []
 
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
 
@@ -100,6 +101,16 @@ class DTUDatasetBase():
             P = (world_mat @ scale_mat)[:3,:4]
             K, c2w = load_K_Rt_from_P(P)
             fx, fy, cx, cy = K[0,0] * self.factor, K[1,1] * self.factor, K[0,2] * self.factor, K[1,2] * self.factor
+            self.intrinsics.append(
+                torch.tensor(
+                    [
+                        [fx, 0, cx],
+                        [0, fy, cy],
+                        [0, 0, 1]
+                    ]
+                    ,dtype=torch.float32
+                )
+            )
             directions = get_ray_directions(w, h, fx, fy, cx, cy)
             self.directions.append(directions)
             
@@ -140,6 +151,7 @@ class DTUDatasetBase():
         self.all_fg_masks_all = torch.stack(self.all_fg_masks, dim=0)  
         self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
         self.directions_all = torch.stack(self.directions, dim=0)
+        self.intrinsics = torch.stack(self.intrinsics, dim=0)
 
         initial_view = self.config.get('initial_view', None)
 

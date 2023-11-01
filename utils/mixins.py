@@ -35,6 +35,11 @@ class SaverMixin():
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         return save_path
     
+    def get_warp_path(self, filename):
+        save_path = os.path.join(self.save_dir, 'warp', filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        return save_path
+    
     DEFAULT_RGB_KWARGS = {'data_format': 'CHW', 'data_range': (0, 1)}
     DEFAULT_UV_KWARGS = {'data_format': 'CHW', 'data_range': (0, 1), 'cmap': 'checkerboard'}
     DEFAULT_GRAYSCALE_KWARGS = {'data_range': None, 'cmap': 'jet'}
