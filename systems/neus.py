@@ -289,7 +289,7 @@ class NeuSSystem(BaseSystem):
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
             self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True, sync_dist=True)
         
-        if self.global_step < self.config.trainer.max_steps:
+        if self.global_step < self.config.trainer.max_steps and self.global_step < self.config.view_steps:
             if self.initial_view:
                 ### IDLE: random sample from all candidate views
                 # select_view = random.sample(self.candidate_views, 1)[0]
@@ -317,13 +317,13 @@ class NeuSSystem(BaseSystem):
                 self.opacity_uncertainty = []
                 self.eikonal_uncertainty = []
                 self.tv_uncertainty = []
-                print(self.initial_view)
 
-        else:
+        elif self.global_step >= self.config.trainer.max_steps:
             if self.initial_view:
                 with open(self.get_save_path("select_views.txt"), "w") as f:
                     f.write(str(self.initial_view))
 
+        print(self.initial_view)
 
     def test_step(self, batch, batch_idx):
         out = self(batch)

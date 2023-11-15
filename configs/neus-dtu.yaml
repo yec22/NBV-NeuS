@@ -1,6 +1,7 @@
 name: neus-dtu-${basename:${dataset.root_dir}}
 tag: ""
 seed: 42
+view_steps: 20000
 
 dataset:
   name: dtu

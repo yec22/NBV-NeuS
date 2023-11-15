@@ -1,7 +1,8 @@
 name: neus-dtu-${basename:${dataset.root_dir}}-sparse
 tag: ""
 seed: 42
-total_views: 8
+total_views: 5
+view_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}
 
 dataset:
   name: dtu
@@ -14,7 +15,7 @@ dataset:
   n_view: 3
 
 trainer:
-  max_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}
+  max_steps: ${max:${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}, 12000}
   log_every_n_steps: 100
   num_sanity_val_steps: 0
   val_check_interval: 2000
