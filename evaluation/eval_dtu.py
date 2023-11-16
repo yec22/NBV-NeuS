@@ -191,7 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--log', type=str, default=None)
     args = parser.parse_args()
 
-    base_dir = "exp/neus-dtu-dtu_scan105-sparse/@20231028-163918/save"
+    base_dir = "exp/neus-dtu-dtu_scan105-sparse/@20231116-174605/save"
     args.dataset_dir = "/data/yesheng/3D-Scene/data/DTU_gt_pcd"
 
     scans = [105]

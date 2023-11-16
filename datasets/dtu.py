@@ -33,6 +33,28 @@ def load_K_Rt_from_P(P=None):
 
     return intrinsics, pose
 
+def get_world_normal(normal, extrin):
+    '''
+    Args:
+        normal: N*3
+        extrinsics: 4*4, world to camera
+    Return:
+        normal: N*3, in world space 
+    '''
+    extrinsics = copy.deepcopy(extrin)
+    if torch.is_tensor(extrinsics):
+        extrinsics = extrinsics.cpu().numpy()
+        
+    assert extrinsics.shape[0] ==4
+    normal = normal.transpose()
+    extrinsics[:3, 3] = np.zeros(3)  # only rotation, no translation
+
+    normal_world = np.matmul(np.linalg.inv(extrinsics),
+                            np.vstack((normal, np.ones((1, normal.shape[1])))))[:3]
+    normal_world = normal_world.transpose((1, 0))
+
+    return normal_world
+
 def create_spheric_poses(cameras, n_steps=120):
     center = torch.as_tensor([0.,0.,0.], dtype=cameras.dtype, device=cameras.device)
     cam_center = F.normalize(cameras.mean(0), p=2, dim=-1) * cameras.mean(0).norm(2)
@@ -66,30 +88,37 @@ class DTUDatasetBase():
         img_sample = cv2.imread(os.path.join(self.config.root_dir, 'image', '000000.png'))
         H, W = img_sample.shape[0], img_sample.shape[1]
 
-        if 'img_wh' in self.config:
-            w, h = self.config.img_wh
-            assert round(W / w * h) == H
-        elif 'img_downscale' in self.config:
-            w, h = int(W / self.config.img_downscale + 0.5), int(H / self.config.img_downscale + 0.5)
+        if self.split == 'train':
+            w, h = 384, 384
         else:
-            raise KeyError("Either img_wh or img_downscale should be specified.")
+            if 'img_wh' in self.config:
+                w, h = self.config.img_wh
+                assert round(W / w * h) == H
+            elif 'img_downscale' in self.config:
+                w, h = int(W / self.config.img_downscale + 0.5), int(H / self.config.img_downscale + 0.5)
+            else:
+                raise KeyError("Either img_wh or img_downscale should be specified.")
         
-        if split == 'val':
+        if self.split == 'val':
             w, h = w//4, h//4
 
         self.w, self.h = w, h
         self.img_wh = (w, h)
-        self.factor = w / W
+        self.factor = h / H
 
-        mask_dir = os.path.join(self.config.root_dir, 'mask')
+        if self.split == 'train':
+            mask_dir = os.path.join(self.config.root_dir, 'mask_crop')
+        else:
+            mask_dir = os.path.join(self.config.root_dir, 'mask')
         self.has_mask = True
         self.apply_mask = self.config.apply_mask
 
         depth_dir = os.path.join(self.config.root_dir, 'depth')
+        normal_dir = os.path.join(self.config.root_dir, 'normal')
         
         self.directions = []
         self.all_c2w, self.all_images, self.all_fg_masks = [], [], []
-        self.pred_depths = []
+        self.pred_normals = []
         self.intrinsics = []
 
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
@@ -100,7 +129,14 @@ class DTUDatasetBase():
             world_mat, scale_mat = cams[f'world_mat_{i}'], cams[f'scale_mat_{i}']
             P = (world_mat @ scale_mat)[:3,:4]
             K, c2w = load_K_Rt_from_P(P)
-            fx, fy, cx, cy = K[0,0] * self.factor, K[1,1] * self.factor, K[0,2] * self.factor, K[1,2] * self.factor
+            if self.split == "train":
+                fx, fy = K[0,0] * self.factor, K[1,1] * self.factor
+                cx = (K[0, 2] - (W - H) // 2) * self.factor
+                cy = K[1, 2] * self.factor
+            else:
+                fx, fy = K[0,0] * self.factor, K[1,1] * self.factor
+                cx = K[0, 2] * self.factor
+                cy = K[1, 2] * self.factor
             self.intrinsics.append(
                 torch.tensor(
                     [
@@ -122,34 +158,42 @@ class DTUDatasetBase():
             # for c2w, flip the sign of input camera coordinate yz
             c2w_ = c2w.clone()
             c2w_[:3,1:3] *= -1. # flip input sign
-            self.all_c2w.append(c2w_[:3,:4])         
+            self.all_c2w.append(c2w_[:3,:4])       
 
-            img_path = os.path.join(self.config.root_dir, 'image', f'{i:06d}.png')
+            if self.split == 'train':
+                img_path = os.path.join(self.config.root_dir, 'image_crop', f'{i:06d}.png')
+            else:
+                img_path = os.path.join(self.config.root_dir, 'image', f'{i:06d}.png')
             img = Image.open(img_path)
             img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0)[...,:3]
 
-            mask_path = os.path.join(mask_dir, f'{i:03d}.png')
+            if self.split == 'train':
+                mask_path = os.path.join(mask_dir, f'{i:06d}.png')
+            else:
+                mask_path = os.path.join(mask_dir, f'{i:03d}.png')
             mask = Image.open(mask_path).convert('L') # (H, W, 1)
             mask = mask.resize(self.img_wh, Image.BICUBIC)
             mask = TF.to_tensor(mask)[0]
-
-            pred_depth_path = os.path.join(depth_dir, f'{i:06d}.png')
-            if os.path.exists(pred_depth_path):
-                depth = Image.open(pred_depth_path).convert('L') # (H, W, 1)
-                depth = depth.resize(self.img_wh, Image.BICUBIC)
-                depth = TF.to_tensor(depth)[0]
+            
+            if self.split == 'train':
+                pred_normal_path = os.path.join(normal_dir, f'{i:06d}.npz')
+                normal = np.load(pred_normal_path)['arr_0']
+                normal[:, :, 1:3] *= -1.
+                ex_i = torch.linalg.inv(c2w_)
+                normal_world = get_world_normal(normal.reshape(-1, 3), ex_i).reshape(self.img_wh[1], self.img_wh[0], 3)
             else:
-                depth = torch.zeros((self.img_wh[1], self.img_wh[0]), dtype=torch.float32)
+                normal_world = np.zeros((self.img_wh[1], self.img_wh[0], 3))
+            normal_world = torch.from_numpy(normal_world).float()
 
             self.all_fg_masks.append(mask) # (h, w)
             self.all_images.append(img)
-            self.pred_depths.append(depth)
+            self.pred_normals.append(normal_world)
 
         self.all_c2w_all = torch.stack(self.all_c2w, dim=0)
         self.all_images_all = torch.stack(self.all_images, dim=0)
         self.all_fg_masks_all = torch.stack(self.all_fg_masks, dim=0)  
-        self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
+        self.pred_normals_all = torch.stack(self.pred_normals, dim=0)
         self.directions_all = torch.stack(self.directions, dim=0)
         self.intrinsics = torch.stack(self.intrinsics, dim=0)
 
@@ -224,17 +268,17 @@ class DTUDatasetBase():
         print(self.split, self.initial_view)
 
         # only train with limited views
-        if self.split == 'train':
+        if self.split == 'train' or self.split == 'train_high':
             if self.initial_view:
                 self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
                 self.all_images_train = self.all_images_all[self.initial_view,...]
-                self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.pred_normals_train = self.pred_normals_all[self.initial_view,...]
                 self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
                 self.directions_train = self.directions_all[self.initial_view,...]
             else:
                 self.all_c2w_train = self.all_c2w_all
                 self.all_images_train = self.all_images_all
-                self.pred_depths_train = self.pred_depths_all
+                self.pred_normals_train = self.pred_normals_all
                 self.all_fg_masks_train = self.all_fg_masks_all
                 self.directions_train = self.directions_all
         
@@ -242,27 +286,27 @@ class DTUDatasetBase():
         elif self.split == 'val':
             self.all_c2w = self.all_c2w_all[self.candidate_views,...]
             self.all_images = self.all_images_all[self.candidate_views,...]
-            self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+            self.pred_normals = self.pred_normals_all[self.candidate_views,...]
             self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
             self.directions = self.directions_all[self.candidate_views,...]
         
         else: # test
             self.all_c2w = self.all_c2w_all[-1:,...]
             self.all_images = self.all_images_all[-1:,...]
-            self.pred_depths = self.pred_depths_all[-1:,...]
+            self.pred_normals = self.pred_normals_all[-1:,...]
             self.all_fg_masks = self.all_fg_masks_all[-1:,...]
             self.directions = self.directions_all[-1:,...]
         
-        if self.split == 'train':
+        if self.split == 'train' or self.split == 'train_high':
             self.directions_train = self.directions_train.float().to(self.rank)
-            self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+            self.pred_normals_train = self.pred_normals_train.float().to(self.rank)
             self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
                 self.all_c2w_train.float().to(self.rank), \
                 self.all_images_train.float().to(self.rank), \
                 self.all_fg_masks_train.float().to(self.rank)
         else:
             self.directions = self.directions.float().to(self.rank)
-            self.pred_depths = self.pred_depths.float().to(self.rank)
+            self.pred_normals = self.pred_normals.float().to(self.rank)
             self.all_c2w, self.all_images, self.all_fg_masks = \
                 self.all_c2w.float().to(self.rank), \
                 self.all_images.float().to(self.rank), \
@@ -273,30 +317,30 @@ class DTUDatasetBase():
             self.initial_view = copy.deepcopy(initial_view)
             self.candidate_views = copy.deepcopy(candidate_views)
 
-            if self.split == 'train':
+            if self.split == 'train' or self.split == 'train_high':
                 self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
                 self.all_images_train = self.all_images_all[self.initial_view,...]
-                self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.pred_normals_train = self.pred_normals_all[self.initial_view,...]
                 self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
                 self.directions_train = self.directions_all[self.initial_view,...]
             
             if self.split == 'val':
                 self.all_c2w = self.all_c2w_all[self.candidate_views,...]
                 self.all_images = self.all_images_all[self.candidate_views,...]
-                self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+                self.pred_normals = self.pred_normals_all[self.candidate_views,...]
                 self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
                 self.directions = self.directions_all[self.candidate_views,...]
             
-            if self.split == 'train':
+            if self.split == 'train' or self.split == 'train_high':
                 self.directions_train = self.directions_train.float().to(self.rank)
-                self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+                self.pred_normals_train = self.pred_normals_train.float().to(self.rank)
                 self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
                     self.all_c2w_train.float().to(self.rank), \
                     self.all_images_train.float().to(self.rank), \
                     self.all_fg_masks_train.float().to(self.rank)
             else:
                 self.directions = self.directions.float().to(self.rank)
-                self.pred_depths = self.pred_depths.float().to(self.rank)
+                self.pred_normals = self.pred_normals.float().to(self.rank)
                 self.all_c2w, self.all_images, self.all_fg_masks = \
                     self.all_c2w.float().to(self.rank), \
                     self.all_images.float().to(self.rank), \
@@ -334,12 +378,13 @@ class DTUDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         if stage in [None, 'fit']:
             self.train_dataset = DTUIterableDataset(self.config, 'train')
+            self.train_high_dataset = DTUIterableDataset(self.config, 'train_high')
         if stage in [None, 'fit', 'validate']:
             self.val_dataset = DTUDataset(self.config, self.config.get('val_split', 'val'))
         if stage in [None, 'test']:
             self.test_dataset = DTUDataset(self.config, self.config.get('test_split', 'test'))
         if stage in [None, 'predict']:
-            self.predict_dataset = DTUDataset(self.config, 'train')    
+            self.predict_dataset = DTUDataset(self.config, 'train')
 
     def prepare_data(self):
         pass
@@ -356,6 +401,9 @@ class DTUDataModule(pl.LightningDataModule):
     
     def train_dataloader(self):
         return self.general_loader(self.train_dataset, batch_size=1)
+    
+    def train_high_dataloader(self):
+        return self.general_loader(self.train_high_dataset, batch_size=1)
 
     def val_dataloader(self):
         return self.general_loader(self.val_dataset, batch_size=1)

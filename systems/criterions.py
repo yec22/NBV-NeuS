@@ -197,7 +197,6 @@ class ScaleAndShiftInvariantLoss(torch.nn.Module):
 class TVLoss(nn.Module):
     def __init__(self, mask=None):
         super(TVLoss,self).__init__()
-        self.TVLoss_mask = mask
 
     def forward(self,x):
         # x: [C, H, W]
@@ -209,9 +208,29 @@ class TVLoss(nn.Module):
         h_tv = torch.pow((x[:,1:,:]-x[:,:h_x-1,:]),2).sum()
         w_tv = torch.pow((x[:,:,1:]-x[:,:,:w_x-1]),2).sum()
         TV_Loss = 2*(h_tv/count_h+w_tv/count_w)
-        if self.TVLoss_mask:
-           TV_Loss = TV_Loss * self.TVLoss_mask
         return TV_Loss
 
     def _tensor_size(self,t):
         return t.size()[0]*t.size()[1]*t.size()[2]
+
+def get_angular_error(normals_source, normals_target, mask = None):
+    '''Get angular error betwee predicted normals and ground truth normals
+    Args:
+        normals_source, normals_target: N*3
+        mask: N*1 (optional, default: None)
+    Return:
+        angular_error: float
+    '''
+    inner = (normals_source * normals_target).sum(dim=-1,keepdim=True)
+    norm_source =  torch.linalg.norm(normals_source, dim=-1, ord=2, keepdim=True)
+    norm_target = torch.linalg.norm(normals_target, dim=-1, ord=2, keepdim=True)
+    angles = torch.arccos(inner/((norm_source*norm_target) + 1e-6))
+    assert not torch.isnan(angles).any()
+    if mask is None:
+        mask = torch.ones_like(angles)
+    if mask.ndim == 1:
+        mask =  mask.unsqueeze(-1)
+    assert angles.ndim == mask.ndim
+
+    angular_error = F.l1_loss(angles*mask, torch.zeros_like(angles), reduction='sum') / (mask+1e-6).sum()
+    return angular_error

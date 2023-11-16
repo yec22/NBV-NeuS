@@ -10,7 +10,7 @@ from models.utils import cleanup
 from models.ray_utils import get_rays
 import systems
 from systems.base import BaseSystem
-from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvariantLoss, TVLoss
+from systems.criterions import PSNR, binary_cross_entropy, ScaleAndShiftInvariantLoss, TVLoss, get_angular_error
 import cv2, random
 from math import sqrt
 from utils.misc import config_to_primitive
@@ -59,7 +59,7 @@ class NeuSSystem(BaseSystem):
             rays_o, rays_d = get_rays(directions, c2w)
             rgb = self.dataset.all_images_train[index, y, x].view(-1, self.dataset.all_images_train.shape[-1]).to(self.rank)
             fg_mask = self.dataset.all_fg_masks_train[index, y, x].view(-1).to(self.rank)
-            pred_depth = self.dataset.pred_depths_train[index, y, x].view(-1).to(self.rank)
+            pred_normal = self.dataset.pred_normals_train[index, y, x].view(-1, self.dataset.pred_normals_all.shape[-1]).to(self.rank)
         else: # validation / test
             c2w = self.dataset.all_c2w[index][0]
             if self.dataset.directions.ndim == 3: # (H, W, 3)
@@ -69,7 +69,7 @@ class NeuSSystem(BaseSystem):
             rays_o, rays_d = get_rays(directions, c2w)
             rgb = self.dataset.all_images[index].view(-1, self.dataset.all_images.shape[-1]).to(self.rank)
             fg_mask = self.dataset.all_fg_masks[index].view(-1).to(self.rank)
-            pred_depth = self.dataset.pred_depths[index].view(-1).to(self.rank)
+            pred_normal = self.dataset.pred_normals[index].view(-1, self.dataset.pred_normals_all.shape[-1]).to(self.rank)
 
         rays = torch.cat([rays_o, F.normalize(rays_d, p=2, dim=-1)], dim=-1)
 
@@ -90,7 +90,7 @@ class NeuSSystem(BaseSystem):
             'rays': rays,
             'rgb': rgb,
             'fg_mask': fg_mask,
-            'pred_depth': pred_depth
+            'pred_normal': pred_normal
         })
 
         if 'index' in batch: # test / validation
@@ -131,6 +131,14 @@ class NeuSSystem(BaseSystem):
             loss_depth = ScaleAndShiftInvariantLoss()(depth_render, depth_pred, depth_mask)
             self.log('train/loss_depth', loss_depth)
             loss += loss_depth * self.C2(self.config.system.loss.get('lambda_depth', 0))
+        
+        if self.C(self.config.system.loss.get('lambda_normal', 0)) > 0 and self.global_step < self.config.normal_steps:
+            normal_source = out['comp_normal']
+            normal_target = batch['pred_normal']
+            mask = batch['fg_mask'].float().unsqueeze(-1)
+            loss_normal = get_angular_error(normal_source, normal_target, mask)
+            self.log('train/loss_normal', loss_normal)
+            loss += loss_normal * self.C(self.config.system.loss.get('lambda_normal', 0))
         
         lbd = self.config.system.loss.get('lambda_consis', 0)
         if isinstance(lbd, int) or isinstance(lbd, float):
@@ -238,7 +246,7 @@ class NeuSSystem(BaseSystem):
             cam_dist = torch.sum((collect_cams - src_cam) ** 2, dim=-1)
             tar_view = self.initial_view[cam_dist.argmin()]
             
-            frame1 = out['comp_rgb_full'].view(H, W, 3).cpu().numpy()
+            frame1 = out['comp_rgb'].view(H, W, 3).cpu().numpy()
             depth1 = out['depth'].view(H, W).cpu().numpy()
             mask1 = (depth1 > 0.01)
             if len(self.dataset.intrinsics) > 1:
@@ -261,7 +269,12 @@ class NeuSSystem(BaseSystem):
             transform2 = np.linalg.inv(transform2)
 
             save_name = self.get_warp_path(f"it{self.global_step}-{batch['index'][0].item()}-warp.png")
-            warp(frame1, frame2, depth1, mask1, intrinsic1, intrinsic2, transform1, transform2, save_name)
+            warped_frame2 = warp(frame1, frame2, depth1, mask1, intrinsic1, intrinsic2, transform1, transform2, save_name)
+
+            mask = self.dataset.all_fg_masks_all[tar_view].cpu().numpy()
+            consistency_unc = F.l1_loss(torch.from_numpy(warped_frame2)[mask > 0.5], torch.from_numpy(frame2)[mask > 0.5])
+
+            self.consistency_uncertainty.append(consistency_unc)
 
         return {
             'psnr': psnr,
@@ -300,14 +313,19 @@ class NeuSSystem(BaseSystem):
                 # select_view = self.candidate_views[self.opacity_uncertainty.index(max_uncertainty)]
                 
                 ### Option 2: maximize eikonal uncertainty
-                self.eikonal_uncertainty = self.eikonal_uncertainty[:len(self.candidate_views)]
-                max_uncertainty = max(self.eikonal_uncertainty)
-                select_view = self.candidate_views[self.eikonal_uncertainty.index(max_uncertainty)]
+                # self.eikonal_uncertainty = self.eikonal_uncertainty[:len(self.candidate_views)]
+                # max_uncertainty = max(self.eikonal_uncertainty)
+                # select_view = self.candidate_views[self.eikonal_uncertainty.index(max_uncertainty)]
 
                 ### Option 3: maximize tv uncertainty
                 # self.tv_uncertainty = self.tv_uncertainty[:len(self.candidate_views)]
                 # max_uncertainty = max(self.tv_uncertainty)
                 # select_view = self.candidate_views[self.tv_uncertainty.index(max_uncertainty)]
+
+                ### Option 4: maximize consistency uncertainty
+                self.consistency_uncertainty = self.consistency_uncertainty[:len(self.candidate_views)]
+                max_uncertainty = max(self.consistency_uncertainty)
+                select_view = self.candidate_views[self.consistency_uncertainty.index(max_uncertainty)]
 
                 # update
                 self.candidate_views.remove(select_view)
@@ -317,6 +335,7 @@ class NeuSSystem(BaseSystem):
                 self.opacity_uncertainty = []
                 self.eikonal_uncertainty = []
                 self.tv_uncertainty = []
+                self.consistency_uncertainty = []
 
         elif self.global_step >= self.config.trainer.max_steps:
             if self.initial_view:

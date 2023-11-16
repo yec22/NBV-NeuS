@@ -1,8 +1,9 @@
 name: neus-dtu-${basename:${dataset.root_dir}}-sparse
 tag: ""
 seed: 42
-total_views: 5
-view_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}
+total_views: 6
+view_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}
+normal_steps: ${add:${view_steps}, 1000}
 
 dataset:
   name: dtu
@@ -11,14 +12,14 @@ dataset:
   cameras_file: cameras_sphere.npz
   img_downscale: 2 # specify training image size by either img_wh or img_downscale
   apply_mask: true
-  initial_view: cluster
+  initial_view: farthest
   n_view: 3
 
 trainer:
-  max_steps: ${max:${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}, 12000}
+  max_steps: ${max:${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}, 10000}
   log_every_n_steps: 100
   num_sanity_val_steps: 0
-  val_check_interval: 2000
+  val_check_interval: 1000
   enable_progress_bar: true
   precision: 16
 
@@ -52,13 +53,13 @@ model:
       threshold: 0.
     xyz_encoding_config:
       otype: HashGrid
-      n_levels: 16
+      n_levels: 12
       n_features_per_level: 2
       log2_hashmap_size: 19
       base_resolution: 32
       per_level_scale: 1.3195079107728942
       include_xyz: true
-      T: ${max:${trainer.max_steps}, 12000}
+      T: ${max:${trainer.max_steps}, 10000}
     mlp_network_config:
       otype: VanillaMLP
       activation: ReLU
@@ -95,8 +96,9 @@ system:
     lambda_distortion_bg: 0.0
     lambda_opaque: 0.0
     lambda_depth: 0.0
+    lambda_normal: 0.05
     lambda_orient: 0.0
-    lambda_consis: [0.05, 0.01]
+    lambda_consis: [0.05, 0.005]
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -111,7 +113,7 @@ system:
         lr: 0.01
       variance:
         lr: 0.001
-  constant_steps: ${idiv:${trainer.max_steps}, 6}
+  constant_steps: ${idiv:${trainer.max_steps}, 5}
   scheduler:
     name: SequentialLR
     interval: step

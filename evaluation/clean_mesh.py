@@ -231,7 +231,7 @@ if __name__ == "__main__":
     mask_kernel_size = 11
 
     dtu_dir = "load/DTU"
-    exp_paths = ["exp/neus-dtu-dtu_scan105-sparse/@20231028-163918/save"]
+    exp_paths = ["exp/neus-dtu-dtu_scan105-sparse/@20231116-174605/save"]
 
     for scan, exp_path in zip(scans, exp_paths):
         print("processing scan%d" % scan)

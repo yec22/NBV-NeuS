@@ -184,6 +184,8 @@ def save_image(frame, save_name, rgb=False):
 
 def warp(frame1, frame2, depth1, mask1, intrinsic1, intrinsic2, transform1, transform2, save_name):
     warper = Warper()
-    warped_frame2 = warper.forward_warp(frame1, mask1, depth1, transform1, transform2, intrinsic1, intrinsic2)[0]
+    warped_frame2, mask2, _, _ = warper.forward_warp(frame1, mask1, depth1, transform1, transform2, intrinsic1, intrinsic2)
     
+    warped_frame2[~mask2] = 0
     save_image(warped_frame2, save_name, rgb=True)
+    return warped_frame2

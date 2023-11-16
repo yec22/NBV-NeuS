@@ -24,6 +24,7 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         self.opacity_uncertainty = []
         self.eikonal_uncertainty = []
         self.tv_uncertainty = []
+        self.consistency_uncertainty = []
     
     def prepare(self):
         pass
@@ -73,7 +74,10 @@ class BaseSystem(pl.LightningModule, SaverMixin):
     But on_after_batch_transfer does not support DP.
     """
     def on_train_batch_start(self, batch, batch_idx, unused=0):
-        self.dataset = self.trainer.datamodule.train_dataloader().dataset
+        if self.global_step >= self.config.normal_steps:
+            self.dataset = self.trainer.datamodule.train_high_dataloader().dataset
+        else:
+            self.dataset = self.trainer.datamodule.train_dataloader().dataset
         if self.use_initial_view and (self.initial_view is None):
             self.initial_view = copy.deepcopy(self.dataset.initial_view)
             self.candidate_views = copy.deepcopy(self.dataset.candidate_views)

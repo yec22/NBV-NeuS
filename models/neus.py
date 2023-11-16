@@ -236,8 +236,13 @@ class NeuSModel(BaseModel):
         _, gradient_moved = self.geometry(pts_moved, with_grad=True, with_feature=False)
         gradient_moved_norm = F.normalize(gradient_moved, p=2, dim=-1)
         consis_constraint = 1 - F.cosine_similarity(gradient_moved_norm, normal, dim=-1)
+        
+        pts_eps = positions + normal * 0.05 * torch.abs(sdf.unsqueeze(-1))
+        _, gradient_eps = self.geometry(pts_eps, with_grad=True, with_feature=False)
+        hessian_constraint = torch.sum(torch.abs(gradient_eps - sdf_grad), dim=-1)
+        
         weight_moved = torch.exp(-10 * torch.abs(sdf))
-        consis_constraint = consis_constraint * weight_moved
+        consis_constraint = (consis_constraint + hessian_constraint) * weight_moved
 
         alpha = self.get_alpha(sdf, normal, t_dirs, dists)[...,None]
         rgb = self.texture(feature, t_dirs, normal)
