@@ -231,18 +231,16 @@ class NeuSModel(BaseModel):
         else:
             sdf, sdf_grad, feature = self.geometry(positions, with_grad=True, with_feature=True)
         normal = F.normalize(sdf_grad, p=2, dim=-1)
-
-        pts_moved = positions - normal * torch.abs(sdf.unsqueeze(-1))
-        _, gradient_moved = self.geometry(pts_moved, with_grad=True, with_feature=False)
-        gradient_moved_norm = F.normalize(gradient_moved, p=2, dim=-1)
-        consis_constraint = 1 - F.cosine_similarity(gradient_moved_norm, normal, dim=-1)
         
-        pts_eps = positions + normal * 0.05 * torch.abs(sdf.unsqueeze(-1))
+        grid_res = self.config.geometry.xyz_encoding_config.base_resolution * \
+                   self.config.geometry.xyz_encoding_config.per_level_scale** \
+                    (self.config.geometry.xyz_encoding_config.n_levels - 1)
+        grid_size = 2 * self.config.geometry.radius / grid_res
+        pts_eps = positions + normal * grid_size
         _, gradient_eps = self.geometry(pts_eps, with_grad=True, with_feature=False)
-        hessian_constraint = torch.sum(torch.abs(gradient_eps - sdf_grad), dim=-1)
-        
+        hessian_constraint = torch.sum(torch.abs(gradient_eps - sdf_grad) / grid_size, dim=-1)
         weight_moved = torch.exp(-10 * torch.abs(sdf))
-        consis_constraint = (consis_constraint + hessian_constraint) * weight_moved
+        consis_constraint = 0.1 * hessian_constraint * weight_moved
 
         alpha = self.get_alpha(sdf, normal, t_dirs, dists)[...,None]
         rgb = self.texture(feature, t_dirs, normal)

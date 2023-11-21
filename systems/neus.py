@@ -147,7 +147,7 @@ class NeuSSystem(BaseSystem):
             lbd = config_to_primitive(lbd)
         if isinstance(lbd, list) and len(lbd) == 2:
             lbd = lbd + [self.config.trainer.max_steps]
-        if self.C(lbd) > 0:
+        if self.C(lbd) > 0 and self.global_step < self.config.hessian_steps:
             loss_consis = torch.mean(out['consis_constraint'])
             loss += loss_consis * self.C(lbd)
         

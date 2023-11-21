@@ -4,6 +4,7 @@ seed: 42
 total_views: 6
 view_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}
 normal_steps: ${add:${view_steps}, 1000}
+hessian_steps: ${idiv:${normal_steps}, 2}
 
 dataset:
   name: dtu
