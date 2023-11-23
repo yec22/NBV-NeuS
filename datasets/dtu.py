@@ -226,7 +226,7 @@ class DTUDatasetBase():
             n = self.config.get('n_view', 3)
             scene_id = self.config.get('scene')
 
-            if scene_id > 80:
+            if isinstance(scene_id, int) and scene_id > 80:
                 camera_pos_front = self.all_c2w_all[:49, :, 3]
                 camera_pos_back = self.all_c2w_all[49:, :, 3]
 

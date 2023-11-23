@@ -1,0 +1,138 @@
+name: neus-bmvs-${basename:${dataset.root_dir}}-sparse
+tag: ""
+seed: 42
+total_views: 12
+view_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}
+normal_steps: ${add:${view_steps}, 3000}
+hessian_steps: ${idiv:${normal_steps}, 2}
+
+dataset:
+  name: dtu
+  scene: ???
+  root_dir: ./load/BlendedMVS/bmvs_${dataset.scene}
+  cameras_file: cameras_sphere.npz
+  img_downscale: 1 # specify training image size by either img_wh or img_downscale
+  apply_mask: true
+  initial_view: cluster
+  n_view: 6
+
+trainer:
+  max_steps: ${max:${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}, 20000}
+  log_every_n_steps: 100
+  num_sanity_val_steps: 0
+  val_check_interval: 1000
+  enable_progress_bar: true
+  precision: 16
+
+model:
+  name: neus
+  radius: 1.0
+  num_samples_per_ray: 1024
+  train_num_rays: 256
+  max_train_num_rays: 8192
+  grid_prune: true
+  grid_prune_occ_thre: 0.001
+  dynamic_ray_sampling: true
+  batch_image_sampling: true
+  randomized: true
+  ray_chunk: 4096
+  cos_anneal_end: ${trainer.max_steps}
+  learned_background: false
+  background_color: white
+  variance:
+    init_val: 0.3
+    modulate: false
+  geometry:
+    name: volume-sdf
+    radius: ${model.radius}
+    feature_dim: 13
+    grad_type: analytic
+    isosurface:
+      method: mc
+      resolution: 512
+      chunk: 2097152
+      threshold: 0.
+    xyz_encoding_config:
+      otype: HashGrid
+      n_levels: 12
+      n_features_per_level: 2
+      log2_hashmap_size: 19
+      base_resolution: 32
+      per_level_scale: 1.3195079107728942
+      include_xyz: true
+      T: ${max:${trainer.max_steps}, 20000}
+    mlp_network_config:
+      otype: VanillaMLP
+      activation: ReLU
+      output_activation: none
+      n_neurons: 64
+      n_hidden_layers: 1
+      sphere_init: true
+      sphere_init_radius: 0.5
+      weight_norm: true
+  texture:
+    name: volume-radiance
+    input_feature_dim: ${add:${model.geometry.feature_dim}, 3} # surface normal
+    dir_encoding_config:
+      otype: SphericalHarmonics
+      degree: 3
+    mlp_network_config:
+      otype: FullyFusedMLP
+      activation: ReLU
+      output_activation: none
+      n_neurons: 64
+      n_hidden_layers: 2
+    color_activation: sigmoid
+
+system:
+  name: neus-system
+  loss:
+    lambda_rgb_mse: 0.
+    lambda_rgb_l1: 1.
+    lambda_mask: 0.1
+    lambda_eikonal: 0.1
+    lambda_curvature: 0.
+    lambda_sparsity: 0.0
+    lambda_distortion: 0.0
+    lambda_distortion_bg: 0.0
+    lambda_opaque: 0.0
+    lambda_depth: 0.0
+    lambda_normal: 0.05
+    lambda_orient: 0.0
+    lambda_consis: [0.05, 0.005]
+    sparsity_scale: 1.
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.01
+      betas: [0.9, 0.99]
+      eps: 1.e-15
+    params:
+      geometry:
+        lr: 0.01
+      texture:
+        lr: 0.01
+      variance:
+        lr: 0.001
+  constant_steps: ${idiv:${trainer.max_steps}, 5}
+  scheduler:
+    name: SequentialLR
+    interval: step
+    milestones:
+      - ${system.constant_steps}
+    schedulers:
+      - name: ConstantLR
+        args:
+          factor: 1.0
+          total_iters: ${system.constant_steps}
+      - name: ExponentialLR
+        args:
+          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.constant_steps}}}
+
+checkpoint:
+  save_top_k: -1
+  every_n_train_steps: ${trainer.max_steps}
+
+export:
+  chunk_size: 2097152
+  export_vertex_color: True
