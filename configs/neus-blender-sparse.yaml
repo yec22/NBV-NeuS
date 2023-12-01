@@ -2,6 +2,9 @@ name: neus-blender-${dataset.scene}-sparse
 tag: ""
 seed: 42
 total_views: 8
+view_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}
+normal_steps: ${add:${view_steps}, 1000}
+hessian_steps: ${idiv:${normal_steps}, 2}
 
 dataset:
   name: blender
@@ -19,10 +22,10 @@ dataset:
   n_view: 4
 
 trainer:
-  max_steps: ${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 2000}
+  max_steps: ${max:${mul:${sub:${add:${total_views}, 1}, ${dataset.n_view}}, 1000}, 10000}
   log_every_n_steps: 100
   num_sanity_val_steps: 0
-  val_check_interval: 2000
+  val_check_interval: 1000
   enable_progress_bar: true
   precision: 16
 
@@ -56,13 +59,13 @@ model:
       threshold: 0.
     xyz_encoding_config:
       otype: HashGrid
-      n_levels: 16
+      n_levels: 12
       n_features_per_level: 2
       log2_hashmap_size: 19
       base_resolution: 32
       per_level_scale: 1.3195079107728942
       include_xyz: true
-      T: ${trainer.max_steps}
+      T: ${max:${trainer.max_steps}, 10000}
     mlp_network_config:
       otype: VanillaMLP
       activation: ReLU
@@ -96,10 +99,11 @@ system:
     lambda_curvature: 0.
     lambda_sparsity: 0.0
     lambda_distortion: 0.
-    lambda_opaque: 0.
+    lambda_opaque: 0.0
     lambda_depth: 0.0
-    lambda_orient: 5.0
-    lambda_consis: [0.05, 0.01]
+    lambda_normal: 0.05
+    lambda_orient: 0.0
+    lambda_consis: [0.05, 0.005]
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -114,21 +118,20 @@ system:
         lr: 0.01
       variance:
         lr: 0.001
-  warmup_steps: 500
+  constant_steps: ${idiv:${trainer.max_steps}, 5}
   scheduler:
     name: SequentialLR
     interval: step
     milestones:
-      - ${system.warmup_steps}
+      - ${system.constant_steps}
     schedulers:
-      - name: LinearLR # linear warm-up
+      - name: ConstantLR
         args:
-          start_factor: 0.01
-          end_factor: 1.0
-          total_iters: ${system.warmup_steps}
+          factor: 1.0
+          total_iters: ${system.constant_steps}
       - name: ExponentialLR
         args:
-          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.warmup_steps}}}
+          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.constant_steps}}}
 
 checkpoint:
   save_top_k: -1

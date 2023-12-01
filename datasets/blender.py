@@ -1,4 +1,4 @@
-import os
+import os, cv2
 import json
 import math
 import numpy as np
@@ -13,6 +13,27 @@ import datasets
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
 
+def get_world_normal(normal, extrin):
+    '''
+    Args:
+        normal: N*3
+        extrinsics: 4*4, world to camera
+    Return:
+        normal: N*3, in world space 
+    '''
+    extrinsics = copy.deepcopy(extrin)
+    if torch.is_tensor(extrinsics):
+        extrinsics = extrinsics.cpu().numpy()
+        
+    assert extrinsics.shape[0] ==4
+    normal = normal.transpose()
+    extrinsics[:3, 3] = np.zeros(3)  # only rotation, no translation
+
+    normal_world = np.matmul(np.linalg.inv(extrinsics),
+                            np.vstack((normal, np.ones((1, normal.shape[1])))))[:3]
+    normal_world = normal_world.transpose((1, 0))
+
+    return normal_world
 
 class BlenderDatasetBase():
     def setup(self, config, split):
@@ -25,6 +46,8 @@ class BlenderDatasetBase():
 
         if self.split == 'val':
             rewrite_split = 'train'
+        elif self.split == 'train_high':
+            rewrite_split = 'train'
         else:
             rewrite_split = self.split
         with open(os.path.join(self.config.root_dir, f"transforms_{rewrite_split}.json"), 'r') as f:
@@ -35,13 +58,16 @@ class BlenderDatasetBase():
         else:
             W, H = 800, 800
 
-        if 'img_wh' in self.config:
-            w, h = self.config.img_wh
-            assert round(W / w * h) == H
-        elif 'img_downscale' in self.config:
-            w, h = W // self.config.img_downscale, H // self.config.img_downscale
+        if self.split == 'train':
+            w, h = 384, 384
         else:
-            raise KeyError("Either img_wh or img_downscale should be specified.")
+            if 'img_wh' in self.config:
+                w, h = self.config.img_wh
+                assert round(W / w * h) == H
+            elif 'img_downscale' in self.config:
+                w, h = W // self.config.img_downscale, H // self.config.img_downscale
+            else:
+                raise KeyError("Either img_wh or img_downscale should be specified.")
         
         if split == 'val':
             w, h = w//4, h//4
@@ -59,6 +85,7 @@ class BlenderDatasetBase():
 
         self.all_c2w, self.all_images, self.all_fg_masks = [], [], []
         self.pred_depths = []
+        self.pred_normals = []
 
         n_images = len(meta['frames'])
         self.candidate_views = [i for i in range(n_images)]
@@ -76,10 +103,15 @@ class BlenderDatasetBase():
         )
 
         for i, frame in enumerate(meta['frames']):
-            c2w = torch.from_numpy(np.array(frame['transform_matrix'])[:3, :4])
-            self.all_c2w.append(c2w)
+            c2w = torch.from_numpy(np.array(frame['transform_matrix']))
+            self.all_c2w.append(c2w[:3, :4])
 
             img_path = os.path.join(self.config.root_dir, f"{frame['file_path']}.png")
+            
+            if self.split == 'train':
+                img_path_post = os.path.join('image_crop', img_path.split('/')[-1])
+                img_path = os.path.join(self.config.root_dir, img_path_post)
+
             img = Image.open(img_path)
             img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0) # (4, h, w) => (h, w, 4)
@@ -89,7 +121,17 @@ class BlenderDatasetBase():
             self.all_fg_masks.append(img[..., -1]) # (h, w) -> alpha
             self.all_images.append(img[...,:3]) # (h, w, 3) -> RGB
             self.pred_depths.append(depth)
-
+            if self.split == 'train':
+                img_path_post = os.path.join('normal', img_path.split('/')[-1][:-4]+'.npz')
+                pred_normal_path = os.path.join(self.config.root_dir, img_path_post)
+                normal = np.load(pred_normal_path)['arr_0']
+                normal[:, :, 1:3] *= -1.
+                ex_i = torch.linalg.inv(c2w)
+                normal_world = get_world_normal(normal.reshape(-1, 3), ex_i).reshape(self.img_wh[1], self.img_wh[0], 3)
+            else:
+                normal_world = np.zeros((self.img_wh[1], self.img_wh[0], 3))
+            normal_world = torch.from_numpy(normal_world).float()
+            self.pred_normals.append(normal_world)
 
         self.all_c2w_all, self.all_images_all, self.all_fg_masks_all = \
             torch.stack(self.all_c2w, dim=0), \
@@ -97,6 +139,7 @@ class BlenderDatasetBase():
             torch.stack(self.all_fg_masks, dim=0)
         self.intrinsics = torch.stack(self.intrinsics, dim=0)
         self.pred_depths_all = torch.stack(self.pred_depths, dim=0)
+        self.pred_normals_all = torch.stack(self.pred_normals, dim=0)
 
         initial_view = self.config.get('initial_view', None)
 
@@ -147,16 +190,18 @@ class BlenderDatasetBase():
         print(self.split, self.initial_view)
 
         # only train with limited views
-        if self.split == 'train':
+        if self.split == 'train' or self.split == 'train_high':
             if self.initial_view:
                 self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
                 self.all_images_train = self.all_images_all[self.initial_view,...]
                 self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.pred_normals_train = self.pred_normals_all[self.initial_view,...]
                 self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
             else:
                 self.all_c2w_train = self.all_c2w_all
                 self.all_images_train = self.all_images_all
                 self.pred_depths_train = self.pred_depths_all
+                self.pred_normals_train = self.pred_normals_all
                 self.all_fg_masks_train = self.all_fg_masks_all
             self.directions_train = self.directions
         
@@ -165,17 +210,20 @@ class BlenderDatasetBase():
             self.all_c2w = self.all_c2w_all[self.candidate_views,...]
             self.all_images = self.all_images_all[self.candidate_views,...]
             self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+            self.pred_normals = self.pred_normals_all[self.candidate_views,...]
             self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
         
         else: # test
             self.all_c2w = self.all_c2w_all
             self.all_images = self.all_images_all
             self.pred_depths = self.pred_depths_all
+            self.pred_normals = self.pred_normals_all
             self.all_fg_masks = self.all_fg_masks_all
 
-        if self.split == 'train':
+        if self.split == 'train' or self.split == 'train_high':
             self.directions_train = self.directions_train.float().to(self.rank)
             self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+            self.pred_normals_train = self.pred_normals_train.float().to(self.rank)
             self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
                 self.all_c2w_train.float().to(self.rank), \
                 self.all_images_train.float().to(self.rank), \
@@ -183,6 +231,7 @@ class BlenderDatasetBase():
         else: # test / val
             self.directions = self.directions.float().to(self.rank)
             self.pred_depths = self.pred_depths.float().to(self.rank)
+            self.pred_normals = self.pred_normals.float().to(self.rank)
             self.all_c2w, self.all_images, self.all_fg_masks = \
                 self.all_c2w.float().to(self.rank), \
                 self.all_images.float().to(self.rank), \
@@ -193,21 +242,24 @@ class BlenderDatasetBase():
             self.initial_view = copy.deepcopy(initial_view)
             self.candidate_views = copy.deepcopy(candidate_views)
 
-            if self.split == 'train':
+            if self.split == 'train' or self.split == 'train_high':
                 self.all_c2w_train = self.all_c2w_all[self.initial_view,...]
                 self.all_images_train = self.all_images_all[self.initial_view,...]
                 self.pred_depths_train = self.pred_depths_all[self.initial_view,...]
+                self.pred_normals_train = self.pred_normals_all[self.initial_view,...]
                 self.all_fg_masks_train = self.all_fg_masks_all[self.initial_view,...]
             
             if self.split == 'val':
                 self.all_c2w = self.all_c2w_all[self.candidate_views,...]
                 self.all_images = self.all_images_all[self.candidate_views,...]
                 self.pred_depths = self.pred_depths_all[self.candidate_views,...]
+                self.pred_normals = self.pred_normals_all[self.candidate_views,...]
                 self.all_fg_masks = self.all_fg_masks_all[self.candidate_views,...]
             
-            if self.split == 'train':
+            if self.split == 'train' or self.split == 'train_high':
                 self.directions_train = self.directions_train.float().to(self.rank)
                 self.pred_depths_train = self.pred_depths_train.float().to(self.rank)
+                self.pred_normals_train = self.pred_normals_train.float().to(self.rank)
                 self.all_c2w_train, self.all_images_train, self.all_fg_masks_train = \
                     self.all_c2w_train.float().to(self.rank), \
                     self.all_images_train.float().to(self.rank), \
@@ -216,6 +268,7 @@ class BlenderDatasetBase():
             if self.split == 'val':
                 self.directions = self.directions.float().to(self.rank)
                 self.pred_depths = self.pred_depths.float().to(self.rank)
+                self.pred_normals = self.pred_normals.float().to(self.rank)
                 self.all_c2w, self.all_images, self.all_fg_masks = \
                     self.all_c2w.float().to(self.rank), \
                     self.all_images.float().to(self.rank), \
@@ -253,6 +306,7 @@ class BlenderDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         if stage in [None, 'fit']:
             self.train_dataset = BlenderIterableDataset(self.config, self.config.train_split)
+            self.train_high_dataset = BlenderIterableDataset(self.config, 'train_high')
         if stage in [None, 'fit', 'validate']:
             self.val_dataset = BlenderDataset(self.config, self.config.val_split)
         if stage in [None, 'test']:
@@ -275,6 +329,9 @@ class BlenderDataModule(pl.LightningDataModule):
     
     def train_dataloader(self):
         return self.general_loader(self.train_dataset, batch_size=1)
+    
+    def train_high_dataloader(self):
+        return self.general_loader(self.train_high_dataset, batch_size=1)
 
     def val_dataloader(self):
         return self.general_loader(self.val_dataset, batch_size=1)
