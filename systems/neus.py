@@ -346,8 +346,10 @@ class NeuSSystem(BaseSystem):
 
     def test_step(self, batch, batch_idx):
         out = self(batch)
-        psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
+        psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
+        from skimage.metrics import structural_similarity as compare_ssim
+        ssim = compare_ssim(out['comp_rgb_full'].reshape([H, W, 3]).cpu().numpy(), batch['rgb'].reshape([H, W, 3]).cpu().numpy(), data_range=1.0, multichannel=True, channel_axis=2).item()
         self.save_image_grid(f"it{self.global_step}-test/{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': out['comp_rgb_full'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
@@ -360,6 +362,7 @@ class NeuSSystem(BaseSystem):
         ])
         return {
             'psnr': psnr,
+            'ssim': ssim,
             'index': batch['index']
         }      
     
@@ -374,13 +377,18 @@ class NeuSSystem(BaseSystem):
             for step_out in out:
                 # DP
                 if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
+                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr'],
+                                                         'ssim': step_out['ssim']}
                 # DDP
                 else:
                     for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
+                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi],
+                                                    'ssim': step_out['ssim'][oi]}
+                        
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
+            ssim = torch.mean(torch.stack([o['ssim'] for o in out_set.values()]))
             self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True, sync_dist=True)    
+            self.log('test/ssim', ssim, prog_bar=True, rank_zero_only=True, sync_dist=True)
 
             self.save_img_sequence(
                 f"it{self.global_step}-test",
